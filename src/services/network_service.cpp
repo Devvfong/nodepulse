@@ -99,21 +99,21 @@ std::optional<std::vector<domain::NetworkInterfaceMetrics>> NetworkService::samp
             double elapsed_sec = std::chrono::duration<double>(now - prev.timestamp).count();
 
             if (elapsed_sec > 0.001) {
-                // Check counter reset or wrap
-                if (iface.rx_bytes >= prev.rx_bytes) {
+                // Counter reset / rollover detection: current_counter < previous_counter
+                if (iface.rx_bytes < prev.rx_bytes) {
+                    iface.rx_bytes_per_sec = std::nullopt;
+                } else {
                     double rx_rate =
                         static_cast<double>(iface.rx_bytes - prev.rx_bytes) / elapsed_sec;
                     iface.rx_bytes_per_sec = std::round(rx_rate * 100.0) / 100.0;
-                } else {
-                    iface.rx_bytes_per_sec = std::nullopt;
                 }
 
-                if (iface.tx_bytes >= prev.tx_bytes) {
+                if (iface.tx_bytes < prev.tx_bytes) {
+                    iface.tx_bytes_per_sec = std::nullopt;
+                } else {
                     double tx_rate =
                         static_cast<double>(iface.tx_bytes - prev.tx_bytes) / elapsed_sec;
                     iface.tx_bytes_per_sec = std::round(tx_rate * 100.0) / 100.0;
-                } else {
-                    iface.tx_bytes_per_sec = std::nullopt;
                 }
 
                 prev = InterfaceBaseline{iface.rx_bytes, iface.tx_bytes, now};
@@ -150,4 +150,3 @@ void NetworkService::sampling_loop(std::chrono::milliseconds interval) {
 }
 
 }  // namespace nodepulse::services
-

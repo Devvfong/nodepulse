@@ -76,4 +76,3 @@ void NetworkController::get_network(
 }
 
 }  // namespace nodepulse::controllers
-

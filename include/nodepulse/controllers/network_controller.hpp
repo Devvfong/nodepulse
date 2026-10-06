@@ -29,4 +29,3 @@ class NetworkController : public drogon::HttpController<NetworkController> {
 };
 
 }  // namespace nodepulse::controllers
-

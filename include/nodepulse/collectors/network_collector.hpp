@@ -35,4 +35,3 @@ class NetworkCollector {
 };
 
 }  // namespace nodepulse::collectors
-

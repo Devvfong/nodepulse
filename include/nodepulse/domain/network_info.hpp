@@ -24,4 +24,3 @@ struct NetworkInterfaceMetrics {
 };
 
 }  // namespace nodepulse::domain
-
