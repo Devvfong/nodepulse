@@ -4,6 +4,7 @@ add_executable(tests_unit
     unit/config_test.cpp
     unit/error_response_test.cpp
     unit/system_collector_test.cpp
+    unit/cpu_collector_test.cpp
 )
 
 target_link_libraries(tests_unit

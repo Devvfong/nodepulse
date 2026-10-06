@@ -12,10 +12,13 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <nodepulse/collectors/cpu_collector.hpp>
 #include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
+#include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
+#include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -398,6 +401,140 @@ TEST_F(HttpIntegrationTest, ConcurrentSystemAndHealthRequests) {
     }
 }
 
+TEST_F(HttpIntegrationTest, CpuEndpointReturns200AndValidSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    EXPECT_FALSE(resp.get_header("x-request-id").empty());
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    EXPECT_TRUE(json_body.is_object());
+
+    ASSERT_TRUE(json_body.contains("measurement_status"));
+    EXPECT_TRUE(json_body["measurement_status"].is_string());
+    std::string status = json_body["measurement_status"].get<std::string>();
+    EXPECT_TRUE(status == "warming_up" || status == "ready" || status == "cached");
+
+    ASSERT_TRUE(json_body.contains("usage_percent"));
+    if (json_body["usage_percent"].is_null()) {
+        EXPECT_EQ(status, "warming_up");
+    } else {
+        EXPECT_TRUE(json_body["usage_percent"].is_number());
+        EXPECT_GE(json_body["usage_percent"].get<double>(), 0.0);
+        EXPECT_LE(json_body["usage_percent"].get<double>(), 100.0);
+    }
+
+    ASSERT_TRUE(json_body.contains("model_name"));
+    EXPECT_TRUE(json_body["model_name"].is_string());
+
+    ASSERT_TRUE(json_body.contains("physical_cores"));
+    EXPECT_TRUE(json_body["physical_cores"].is_number_unsigned());
+    EXPECT_GE(json_body["physical_cores"].get<uint32_t>(), 1U);
+
+    ASSERT_TRUE(json_body.contains("logical_cores"));
+    EXPECT_TRUE(json_body["logical_cores"].is_number_unsigned());
+    EXPECT_GE(json_body["logical_cores"].get<uint32_t>(), 1U);
+
+    ASSERT_TRUE(json_body.contains("load_average"));
+    EXPECT_TRUE(json_body["load_average"].is_object());
+    ASSERT_TRUE(json_body["load_average"].contains("one_minute"));
+    EXPECT_TRUE(json_body["load_average"]["one_minute"].is_number());
+    EXPECT_GE(json_body["load_average"]["one_minute"].get<double>(), 0.0);
+    ASSERT_TRUE(json_body["load_average"].contains("five_minute"));
+    EXPECT_TRUE(json_body["load_average"]["five_minute"].is_number());
+    EXPECT_GE(json_body["load_average"]["five_minute"].get<double>(), 0.0);
+    ASSERT_TRUE(json_body["load_average"].contains("fifteen_minute"));
+    EXPECT_TRUE(json_body["load_average"]["fifteen_minute"].is_number());
+    EXPECT_GE(json_body["load_average"]["fifteen_minute"].get<double>(), 0.0);
+
+    ASSERT_TRUE(json_body.contains("cores"));
+    EXPECT_TRUE(json_body["cores"].is_array());
+    EXPECT_GE(json_body["cores"].size(), 1U);
+
+    for (const auto& core : json_body["cores"]) {
+        ASSERT_TRUE(core.contains("core_id"));
+        EXPECT_TRUE(core["core_id"].is_number_unsigned());
+        ASSERT_TRUE(core.contains("usage_percent"));
+        if (!core["usage_percent"].is_null()) {
+            EXPECT_TRUE(core["usage_percent"].is_number());
+            EXPECT_GE(core["usage_percent"].get<double>(), 0.0);
+            EXPECT_LE(core["usage_percent"].get<double>(), 100.0);
+        }
+    }
+}
+
+TEST_F(HttpIntegrationTest, CpuEndpointHandlesCollectorFailureGracefully) {
+    auto failing_collector = std::make_shared<nodepulse::collectors::CpuCollector>(
+        "/nonexistent/proc/stat", "/proc/loadavg", "/proc/cpuinfo");
+    auto failing_service = std::make_shared<nodepulse::services::CpuService>(failing_collector);
+    nodepulse::controllers::CpuController::set_cpu_service(failing_service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp.status_code, 500);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_FALSE(json_body["error"]["message"].get<std::string>().empty());
+    EXPECT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_EQ(json_body["error"]["details"].size(), 1U);
+    EXPECT_EQ(json_body["error"]["details"][0]["collector"], "cpu_collector");
+    EXPECT_EQ(json_body["error"]["details"][0]["target_file"], "/proc/stat");
+
+    nodepulse::controllers::CpuController::set_cpu_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
+    constexpr int kNumThreads = 9;
+    constexpr int kRequestsPerThread = 5;
+
+    std::vector<std::future<bool>> futures;
+    for (int t = 0; t < kNumThreads; ++t) {
+        futures.push_back(std::async(std::launch::async, [t]() {
+            for (int r = 0; r < kRequestsPerThread; ++r) {
+                std::string path;
+                if (t % 3 == 0) {
+                    path = "/api/v1/health";
+                } else if (t % 3 == 1) {
+                    path = "/api/v1/system";
+                } else {
+                    path = "/api/v1/cpu";
+                }
+                auto resp = send_http_get(kTestHost, kTestPort, path);
+                if (resp.status_code != 200) {
+                    return false;
+                }
+                auto j = nlohmann::json::parse(resp.body);
+                if (path == "/api/v1/system") {
+                    if (!j.contains("hostname") || !j.contains("uptime_seconds")) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/cpu") {
+                    if (!j.contains("usage_percent") || !j.contains("cores")) {
+                        return false;
+                    }
+                } else {
+                    if (j["status"] != "healthy") {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }));
+    }
+
+    for (auto& f : futures) {
+        EXPECT_TRUE(f.get());
+    }
+}
+
 TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     // 1. Health endpoint (HTTP 200)
     auto resp_health = send_http_get(kTestHost, kTestPort, "/api/v1/health");
@@ -417,7 +554,7 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     EXPECT_EQ(resp_404.count_header("content-type"), 1U);
     EXPECT_NE(resp_404.get_header("content-type").find("application/json"), std::string::npos);
 
-    // 4. Collector failure error response (HTTP 500)
+    // 4. System collector failure error response (HTTP 500)
     auto failing_collector = std::make_shared<nodepulse::collectors::SystemCollector>(
         "/etc/os-release", "/nonexistent/proc/uptime", "/proc/stat");
     auto failing_service = std::make_shared<nodepulse::services::SystemService>(failing_collector);
@@ -429,6 +566,26 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     EXPECT_NE(resp_500.get_header("content-type").find("application/json"), std::string::npos);
 
     nodepulse::controllers::SystemController::set_system_service(nullptr);
+
+    // 5. CPU endpoint (HTTP 200)
+    auto resp_cpu = send_http_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp_cpu.status_code, 200);
+    EXPECT_EQ(resp_cpu.count_header("content-type"), 1U);
+    EXPECT_NE(resp_cpu.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 6. CPU collector failure error response (HTTP 500)
+    auto failing_cpu_collector = std::make_shared<nodepulse::collectors::CpuCollector>(
+        "/nonexistent/proc/stat", "/proc/loadavg", "/proc/cpuinfo");
+    auto failing_cpu_service =
+        std::make_shared<nodepulse::services::CpuService>(failing_cpu_collector);
+    nodepulse::controllers::CpuController::set_cpu_service(failing_cpu_service);
+
+    auto resp_cpu_500 = send_http_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp_cpu_500.status_code, 500);
+    EXPECT_EQ(resp_cpu_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_cpu_500.get_header("content-type").find("application/json"), std::string::npos);
+
+    nodepulse::controllers::CpuController::set_cpu_service(nullptr);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

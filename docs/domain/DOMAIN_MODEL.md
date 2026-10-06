@@ -19,10 +19,12 @@ classDiagram
     }
 
     class CpuMetrics {
-        +Double usagePercent
+        +OptionalDouble usagePercent
+        +String measurementStatus
         +LoadAverage loadAverage
         +String modelName
-        +UInt32 coreCount
+        +UInt32 physicalCores
+        +UInt32 logicalCores
         +List~CpuCoreMetrics~ cores
     }
 

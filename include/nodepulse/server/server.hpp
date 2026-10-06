@@ -10,7 +10,7 @@ namespace nodepulse::server {
 class Server {
   public:
     explicit Server(config::Config config);
-    ~Server() = default;
+    ~Server();
 
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;

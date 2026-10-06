@@ -1,0 +1,10 @@
+cpu  1800 0 1200 9000 0 0 0 0 0 0
+cpu0 1000 0 600 4450 0 0 0 0 0 0
+cpu1 800 0 600 4550 0 0 0 0 0 0
+intr 110000
+ctxt 210000
+btime 1700000000
+processes 5100
+procs_running 2
+procs_blocked 0
+

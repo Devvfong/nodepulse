@@ -65,10 +65,11 @@ This document defines the complete API contracts for NodePulse under the initial
 ### 3. CPU Telemetry
 - **`GET /api/v1/cpu`**
 - **Auth**: `X-API-Key` required
-- **Response 200 OK**:
+- **Response 200 OK (Measurement Ready)**:
   ```json
   {
     "usage_percent": 18.45,
+    "measurement_status": "ready",
     "model_name": "AMD EPYC 7763 64-Core Processor",
     "physical_cores": 4,
     "logical_cores": 8,
@@ -83,6 +84,32 @@ This document defines the complete API contracts for NodePulse under the initial
     ]
   }
   ```
+- **Response 200 OK (Warming Up / Baseline Initializing)**:
+  ```json
+  {
+    "usage_percent": null,
+    "measurement_status": "warming_up",
+    "model_name": "AMD EPYC 7763 64-Core Processor",
+    "physical_cores": 4,
+    "logical_cores": 8,
+    "load_average": {
+      "one_minute": 0.45,
+      "five_minute": 0.62,
+      "fifteen_minute": 0.58
+    },
+    "cores": [
+      { "core_id": 0, "usage_percent": null },
+      { "core_id": 1, "usage_percent": null }
+    ]
+  }
+  ```
+- **Measurement Status Semantics**:
+  - `warming_up`: Initial baseline sample established or counter regression detected; delta interval not yet observed (`usage_percent: null`).
+  - `ready`: Fresh, accurate CPU delta utilization calculated over the preceding measurement interval (`usage_percent: number`).
+  - `cached`: Zero elapsed total jiffies between rapid requests; returns the previous measurement preserved (`usage_percent: number`). This represents a cached previous measurement, not a fresh measurement.
+- **Error Responses**:
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid.
+  - `500 COLLECTOR_FAILURE`: If `/proc/stat` or `/proc/loadavg` cannot be read or parsed.
 
 ---
 

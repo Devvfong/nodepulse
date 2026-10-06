@@ -21,6 +21,7 @@ This document consolidates and indexes all foundational architectural, technical
 | **DEC-011** | Docker Daemon Inspection via Unix Socket with libcurl | Accepted | 2026-10-06 | Direct communication with `/var/run/docker.sock` without shell execution | [COMPONENTS.md](file:///home/devqii/workspace/nodepulse/docs/architecture/COMPONENTS.md) |
 | **DEC-012** | Deferred PostgreSQL Metric Persistence (Phase 14) | Accepted | 2026-10-06 | Keep core agent lightweight and self-contained; optional persistent storage | [IMPLEMENTATION_PLAN.md](file:///home/devqii/workspace/nodepulse/IMPLEMENTATION_PLAN.md#phase-14--postgresql-metric-history) |
 | **DEC-013** | Worker Thread Pool Offloading for Heavy Subsystem Ops | Accepted | 2026-10-06 | Preserve Drogon event loop responsiveness during intensive /proc scans | [ARCHITECTURE.md](file:///home/devqii/workspace/nodepulse/docs/architecture/ARCHITECTURE.md#3-threading--concurrency-model) |
+| **DEC-014** | CPU Utilization Sampling & First-Sample Contract | Accepted | 2026-10-06 | Deterministic non-blocking delta computation and first-sample contract | [DECISIONS.md](file:///home/devqii/workspace/nodepulse/DECISIONS.md#dec-014-cpu-utilization-sampling--first-sample-contract) |
 
 ---
 
@@ -72,5 +73,24 @@ This document consolidates and indexes all foundational architectural, technical
 - **Decision**: Adopt an asynchronous worker thread pool offload strategy for heavy filesystem traversals (such as full process table enumeration in `/api/v1/processes`) and external daemon socket queries.
 - **Clarification of Architectural Origin**: This offload strategy is an intentional architectural design decision adopted by the NodePulse engineering team to preserve Drogon reactive event loop responsiveness and fulfill NFR-001 latency constraints (<25ms p95). It was NOT an externally mandated requirement of the original project specification, but an explicit internal engineering choice to prevent event loop thread starvation.
 - **Consequences**: Prevents request queueing and latency degradation across concurrent HTTP clients during intensive host process table scans.
+
+### DEC-014: CPU Utilization Sampling, Warming-Up State & Non-Blocking Architecture
+- **Context**: CPU utilization cannot be derived instantaneously from a single `/proc/stat` read; it requires measuring differences between two temporal samples. The project requires non-blocking event-loop operation, thread safety, robust counter semantics, and an explicit response contract for the initial request when no prior sample exists.
+- **Decision**:
+  1. **First-Sample Warming-Up State**: When `CpuService` takes its first sample, it establishes a baseline snapshot. Instead of reporting a misleading `0.0%` (which confuses missing measurement with an idle CPU), `usage_percent` (aggregate and per-core) reports `null` with `measurement_status: "warming_up"`.
+  2. **Non-Blocking Background Sampling Mechanism**: `CpuService` supports background periodic sampling (configured via `collectors.cpu.sample_interval_ms`, default 1000ms). When active, a dedicated background thread performs virtual filesystem I/O (`/proc/stat`, `/proc/loadavg`) and updates cached metrics in memory. Drogon event-loop threads service `GET /api/v1/cpu` by copying the cached metrics under a mutex in sub-microseconds without performing blocking file operations or stalling the event loop.
+  3. **Calculation Algorithm**:
+     - `total = user + nice + system + idle + iowait + irq + softirq + steal`
+     - Linux kernel counter semantics: `guest` and `guest_nice` are accounted for in `user` and `nice`, and are NOT added again to prevent double-counting.
+     - `idle_all = idle + iowait`
+     - `busy = total - idle_all` (includes `user`, `nice`, `system`, `irq`, `softirq`, and `steal`).
+     - `usage_percent = (delta_busy / delta_total) * 100.0`, clamped between `0.0` and `100.0`, with `measurement_status: "ready"`.
+  4. **Zero Elapsed Total Jiffies (Cached State)**: If rapid consecutive queries arrive with `curr_total == prev_total`, the endpoint returns the previously calculated measurement marked with `measurement_status: "cached"`. This explicitly communicates that it is a preserved previous measurement, not a fresh calculation.
+  5. **Counter Resets, Anomalies & Core Changes (Hotplug)**:
+     - If `curr_total < prev_total`, `curr_idle < prev_idle`, or `delta_idle > delta_total` (counter wrap or reboot), the baseline snapshot is reset to current, reporting `usage_percent: null` with `measurement_status: "warming_up"`.
+     - `logical_cores` dynamically tracks current active cores from `/proc/stat`. If core count changes (hotplug event), aggregate baseline is reset to `warming_up`. Cores without prior baseline report `usage_percent: null`.
+  6. **Thread Safety**: All mutable state is synchronized using `std::mutex` and `std::condition_variable` in `CpuService`.
+- **Consequences**: Deterministic, truthful metrics reporting with zero Drogon event loop starvation.
+
 
 

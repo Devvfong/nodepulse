@@ -1,0 +1,22 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 154
+model name	: 12th Gen Intel(R) Core(TM) i5-12450H
+stepping	: 3
+physical id	: 0
+siblings	: 2
+core id		: 0
+cpu cores	: 2
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 154
+model name	: 12th Gen Intel(R) Core(TM) i5-12450H
+stepping	: 3
+physical id	: 0
+siblings	: 2
+core id		: 1
+cpu cores	: 2
+

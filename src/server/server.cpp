@@ -7,6 +7,7 @@
 #include <drogon/utils/Utilities.h>
 #include <nlohmann/json.hpp>
 
+#include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
@@ -35,6 +36,10 @@ std::chrono::steady_clock::time_point Server::start_time_ = std::chrono::steady_
 
 Server::Server(config::Config config) : config_(std::move(config)) {}
 
+Server::~Server() {
+    stop();
+}
+
 void Server::setup() {
     if (config_.server.host != "127.0.0.1" && config_.server.host != "::1" &&
         config_.server.host != "localhost") {
@@ -45,6 +50,11 @@ void Server::setup() {
 
     start_time_ = std::chrono::steady_clock::now();
     controllers::HealthController::set_start_time(start_time_);
+
+    if (config_.collectors.cpu.enabled) {
+        controllers::CpuController::get_cpu_service()->start_sampling(
+            std::chrono::milliseconds(config_.collectors.cpu.sample_interval_ms));
+    }
 
     drogon::app().addListener(config_.server.host, config_.server.port);
     drogon::app().setThreadNum(config_.server.threads);
@@ -146,6 +156,7 @@ void Server::run() {
 
 void Server::stop() {
     utils::Logger::get()->info("Stopping NodePulse HTTP server");
+    controllers::CpuController::get_cpu_service()->stop_sampling();
     drogon::app().quit();
 }
 
