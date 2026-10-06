@@ -63,6 +63,7 @@ namespace nodepulse::domain {
 
 struct MemoryMetrics {
     uint64_t total_bytes{0};
+    uint64_t used_bytes{0};
     uint64_t free_bytes{0};
     uint64_t available_bytes{0};
     uint64_t buffers_bytes{0};

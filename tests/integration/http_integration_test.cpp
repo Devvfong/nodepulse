@@ -13,12 +13,15 @@
 #include <nlohmann/json.hpp>
 
 #include <nodepulse/collectors/cpu_collector.hpp>
+#include <nodepulse/collectors/memory_collector.hpp>
 #include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
+#include <nodepulse/controllers/memory_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
+#include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -491,8 +494,85 @@ TEST_F(HttpIntegrationTest, CpuEndpointHandlesCollectorFailureGracefully) {
     nodepulse::controllers::CpuController::set_cpu_service(nullptr);
 }
 
+TEST_F(HttpIntegrationTest, MemoryEndpointReturns200AndValidSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/memory");
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+
+    // Verify all required memory telemetry fields
+    ASSERT_TRUE(json_body.contains("total_bytes"));
+    EXPECT_TRUE(json_body["total_bytes"].is_number_unsigned());
+    EXPECT_GT(json_body["total_bytes"].get<uint64_t>(), 0ULL);
+
+    ASSERT_TRUE(json_body.contains("used_bytes"));
+    EXPECT_TRUE(json_body["used_bytes"].is_number_unsigned());
+    EXPECT_LE(json_body["used_bytes"].get<uint64_t>(), json_body["total_bytes"].get<uint64_t>());
+
+    ASSERT_TRUE(json_body.contains("free_bytes"));
+    EXPECT_TRUE(json_body["free_bytes"].is_number_unsigned());
+    EXPECT_LE(json_body["free_bytes"].get<uint64_t>(), json_body["total_bytes"].get<uint64_t>());
+
+    ASSERT_TRUE(json_body.contains("available_bytes"));
+    EXPECT_TRUE(json_body["available_bytes"].is_number_unsigned());
+    EXPECT_LE(json_body["available_bytes"].get<uint64_t>(),
+              json_body["total_bytes"].get<uint64_t>());
+
+    ASSERT_TRUE(json_body.contains("buffers_bytes"));
+    EXPECT_TRUE(json_body["buffers_bytes"].is_number_unsigned());
+
+    ASSERT_TRUE(json_body.contains("cached_bytes"));
+    EXPECT_TRUE(json_body["cached_bytes"].is_number_unsigned());
+
+    ASSERT_TRUE(json_body.contains("usage_percent"));
+    EXPECT_TRUE(json_body["usage_percent"].is_number());
+    EXPECT_GE(json_body["usage_percent"].get<double>(), 0.0);
+    EXPECT_LE(json_body["usage_percent"].get<double>(), 100.0);
+
+    ASSERT_TRUE(json_body.contains("swap_total_bytes"));
+    EXPECT_TRUE(json_body["swap_total_bytes"].is_number_unsigned());
+
+    ASSERT_TRUE(json_body.contains("swap_free_bytes"));
+    EXPECT_TRUE(json_body["swap_free_bytes"].is_number_unsigned());
+
+    ASSERT_TRUE(json_body.contains("swap_used_bytes"));
+    EXPECT_TRUE(json_body["swap_used_bytes"].is_number_unsigned());
+
+    ASSERT_TRUE(json_body.contains("swap_usage_percent"));
+    EXPECT_TRUE(json_body["swap_usage_percent"].is_number());
+    EXPECT_GE(json_body["swap_usage_percent"].get<double>(), 0.0);
+    EXPECT_LE(json_body["swap_usage_percent"].get<double>(), 100.0);
+}
+
+TEST_F(HttpIntegrationTest, MemoryEndpointHandlesCollectorFailureGracefully) {
+    auto failing_collector =
+        std::make_shared<nodepulse::collectors::MemoryCollector>("/nonexistent/proc/meminfo");
+    auto failing_service = std::make_shared<nodepulse::services::MemoryService>(failing_collector);
+    nodepulse::controllers::MemoryController::set_memory_service(failing_service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/memory");
+    EXPECT_EQ(resp.status_code, 500);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_FALSE(json_body["error"]["message"].get<std::string>().empty());
+    EXPECT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_EQ(json_body["error"]["details"].size(), 1U);
+    EXPECT_EQ(json_body["error"]["details"][0]["collector"], "memory_collector");
+    EXPECT_EQ(json_body["error"]["details"][0]["target_file"], "/proc/meminfo");
+
+    nodepulse::controllers::MemoryController::set_memory_service(nullptr);
+}
+
 TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
-    constexpr int kNumThreads = 9;
+    constexpr int kNumThreads = 12;
     constexpr int kRequestsPerThread = 5;
 
     std::vector<std::future<bool>> futures;
@@ -500,12 +580,14 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
         futures.push_back(std::async(std::launch::async, [t]() {
             for (int r = 0; r < kRequestsPerThread; ++r) {
                 std::string path;
-                if (t % 3 == 0) {
+                if (t % 4 == 0) {
                     path = "/api/v1/health";
-                } else if (t % 3 == 1) {
+                } else if (t % 4 == 1) {
                     path = "/api/v1/system";
-                } else {
+                } else if (t % 4 == 2) {
                     path = "/api/v1/cpu";
+                } else {
+                    path = "/api/v1/memory";
                 }
                 auto resp = send_http_get(kTestHost, kTestPort, path);
                 if (resp.status_code != 200) {
@@ -518,6 +600,10 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
                     }
                 } else if (path == "/api/v1/cpu") {
                     if (!j.contains("usage_percent") || !j.contains("cores")) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/memory") {
+                    if (!j.contains("total_bytes") || !j.contains("usage_percent")) {
                         return false;
                     }
                 } else {
@@ -586,6 +672,26 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     EXPECT_NE(resp_cpu_500.get_header("content-type").find("application/json"), std::string::npos);
 
     nodepulse::controllers::CpuController::set_cpu_service(nullptr);
+
+    // 7. Memory endpoint (HTTP 200)
+    auto resp_mem = send_http_get(kTestHost, kTestPort, "/api/v1/memory");
+    EXPECT_EQ(resp_mem.status_code, 200);
+    EXPECT_EQ(resp_mem.count_header("content-type"), 1U);
+    EXPECT_NE(resp_mem.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 8. Memory collector failure error response (HTTP 500)
+    auto failing_mem_collector =
+        std::make_shared<nodepulse::collectors::MemoryCollector>("/nonexistent/proc/meminfo");
+    auto failing_mem_service =
+        std::make_shared<nodepulse::services::MemoryService>(failing_mem_collector);
+    nodepulse::controllers::MemoryController::set_memory_service(failing_mem_service);
+
+    auto resp_mem_500 = send_http_get(kTestHost, kTestPort, "/api/v1/memory");
+    EXPECT_EQ(resp_mem_500.status_code, 500);
+    EXPECT_EQ(resp_mem_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_mem_500.get_header("content-type").find("application/json"), std::string::npos);
+
+    nodepulse::controllers::MemoryController::set_memory_service(nullptr);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

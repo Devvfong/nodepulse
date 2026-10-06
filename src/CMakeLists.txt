@@ -1,11 +1,14 @@
 add_library(nodepulse_lib STATIC
     config/config.cpp
     collectors/cpu_collector.cpp
+    collectors/memory_collector.cpp
     collectors/system_collector.cpp
     controllers/cpu_controller.cpp
     controllers/health_controller.cpp
+    controllers/memory_controller.cpp
     controllers/system_controller.cpp
     services/cpu_service.cpp
+    services/memory_service.cpp
     services/system_service.cpp
     server/server.cpp
     utils/error_response.cpp

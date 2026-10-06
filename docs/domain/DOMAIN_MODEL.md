@@ -36,6 +36,7 @@ classDiagram
 
     class MemoryMetrics {
         +UInt64 totalBytes
+        +UInt64 usedBytes
         +UInt64 freeBytes
         +UInt64 availableBytes
         +UInt64 buffersBytes

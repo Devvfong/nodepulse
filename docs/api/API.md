@@ -120,6 +120,7 @@ This document defines the complete API contracts for NodePulse under the initial
   ```json
   {
     "total_bytes": 16777216000,
+    "used_bytes": 6291456000,
     "free_bytes": 4194304000,
     "available_bytes": 10485760000,
     "buffers_bytes": 524288000,
@@ -131,6 +132,9 @@ This document defines the complete API contracts for NodePulse under the initial
     "swap_usage_percent": 0.0
   }
   ```
+- **Error Responses**:
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid.
+  - `500 COLLECTOR_FAILURE`: If `/proc/meminfo` cannot be read or parsed.
 
 ---
 
