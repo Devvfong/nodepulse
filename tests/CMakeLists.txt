@@ -6,6 +6,7 @@ add_executable(tests_unit
     unit/system_collector_test.cpp
     unit/cpu_collector_test.cpp
     unit/memory_collector_test.cpp
+    unit/disk_collector_test.cpp
 )
 
 target_link_libraries(tests_unit

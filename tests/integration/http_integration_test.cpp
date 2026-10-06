@@ -13,14 +13,17 @@
 #include <nlohmann/json.hpp>
 
 #include <nodepulse/collectors/cpu_collector.hpp>
+#include <nodepulse/collectors/disk_collector.hpp>
 #include <nodepulse/collectors/memory_collector.hpp>
 #include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
+#include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/memory_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
+#include <nodepulse/services/disk_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -571,8 +574,96 @@ TEST_F(HttpIntegrationTest, MemoryEndpointHandlesCollectorFailureGracefully) {
     nodepulse::controllers::MemoryController::set_memory_service(nullptr);
 }
 
+TEST_F(HttpIntegrationTest, DisksEndpointReturns200AndValidSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/disks");
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.is_array());
+    EXPECT_GE(json_body.size(), 1U);
+
+    bool found_root = false;
+    for (const auto& partition : json_body) {
+        ASSERT_TRUE(partition.contains("filesystem"));
+        EXPECT_TRUE(partition["filesystem"].is_string());
+        EXPECT_FALSE(partition["filesystem"].get<std::string>().empty());
+
+        ASSERT_TRUE(partition.contains("mount_point"));
+        EXPECT_TRUE(partition["mount_point"].is_string());
+        EXPECT_FALSE(partition["mount_point"].get<std::string>().empty());
+
+        ASSERT_TRUE(partition.contains("fstype"));
+        EXPECT_TRUE(partition["fstype"].is_string());
+        EXPECT_FALSE(partition["fstype"].get<std::string>().empty());
+
+        ASSERT_TRUE(partition.contains("total_bytes"));
+        EXPECT_TRUE(partition["total_bytes"].is_number_unsigned());
+
+        ASSERT_TRUE(partition.contains("used_bytes"));
+        EXPECT_TRUE(partition["used_bytes"].is_number_unsigned());
+        EXPECT_LE(partition["used_bytes"].get<uint64_t>(),
+                  partition["total_bytes"].get<uint64_t>());
+
+        ASSERT_TRUE(partition.contains("free_bytes"));
+        EXPECT_TRUE(partition["free_bytes"].is_number_unsigned());
+        EXPECT_LE(partition["free_bytes"].get<uint64_t>(),
+                  partition["total_bytes"].get<uint64_t>());
+
+        ASSERT_TRUE(partition.contains("available_bytes"));
+        EXPECT_TRUE(partition["available_bytes"].is_number_unsigned());
+        EXPECT_LE(partition["available_bytes"].get<uint64_t>(),
+                  partition["free_bytes"].get<uint64_t>());
+
+        ASSERT_TRUE(partition.contains("usage_percent"));
+        EXPECT_TRUE(partition["usage_percent"].is_number());
+        EXPECT_GE(partition["usage_percent"].get<double>(), 0.0);
+        EXPECT_LE(partition["usage_percent"].get<double>(), 100.0);
+
+        ASSERT_TRUE(partition.contains("inodes_total"));
+        EXPECT_TRUE(partition["inodes_total"].is_number_unsigned());
+
+        ASSERT_TRUE(partition.contains("inodes_free"));
+        EXPECT_TRUE(partition["inodes_free"].is_number_unsigned());
+        EXPECT_LE(partition["inodes_free"].get<uint64_t>(),
+                  partition["inodes_total"].get<uint64_t>());
+
+        if (partition["mount_point"].get<std::string>() == "/") {
+            found_root = true;
+            EXPECT_GT(partition["total_bytes"].get<uint64_t>(), 0ULL);
+        }
+    }
+    EXPECT_TRUE(found_root);
+}
+
+TEST_F(HttpIntegrationTest, DisksEndpointHandlesCollectorFailureGracefully) {
+    auto failing_collector =
+        std::make_shared<nodepulse::collectors::DiskCollector>("/nonexistent/proc/mounts");
+    auto failing_service = std::make_shared<nodepulse::services::DiskService>(failing_collector);
+    nodepulse::controllers::DiskController::set_disk_service(failing_service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/disks");
+    EXPECT_EQ(resp.status_code, 500);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_FALSE(json_body["error"]["message"].get<std::string>().empty());
+    EXPECT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_EQ(json_body["error"]["details"].size(), 1U);
+    EXPECT_EQ(json_body["error"]["details"][0]["collector"], "disk_collector");
+    EXPECT_EQ(json_body["error"]["details"][0]["target_file"], "/proc/mounts");
+
+    nodepulse::controllers::DiskController::set_disk_service(nullptr);
+}
+
 TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
-    constexpr int kNumThreads = 12;
+    constexpr int kNumThreads = 15;
     constexpr int kRequestsPerThread = 5;
 
     std::vector<std::future<bool>> futures;
@@ -580,14 +671,16 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
         futures.push_back(std::async(std::launch::async, [t]() {
             for (int r = 0; r < kRequestsPerThread; ++r) {
                 std::string path;
-                if (t % 4 == 0) {
+                if (t % 5 == 0) {
                     path = "/api/v1/health";
-                } else if (t % 4 == 1) {
+                } else if (t % 5 == 1) {
                     path = "/api/v1/system";
-                } else if (t % 4 == 2) {
+                } else if (t % 5 == 2) {
                     path = "/api/v1/cpu";
-                } else {
+                } else if (t % 5 == 3) {
                     path = "/api/v1/memory";
+                } else {
+                    path = "/api/v1/disks";
                 }
                 auto resp = send_http_get(kTestHost, kTestPort, path);
                 if (resp.status_code != 200) {
@@ -604,6 +697,10 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
                     }
                 } else if (path == "/api/v1/memory") {
                     if (!j.contains("total_bytes") || !j.contains("usage_percent")) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/disks") {
+                    if (!j.is_array()) {
                         return false;
                     }
                 } else {
@@ -692,6 +789,27 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     EXPECT_NE(resp_mem_500.get_header("content-type").find("application/json"), std::string::npos);
 
     nodepulse::controllers::MemoryController::set_memory_service(nullptr);
+
+    // 9. Disks endpoint (HTTP 200)
+    auto resp_disks = send_http_get(kTestHost, kTestPort, "/api/v1/disks");
+    EXPECT_EQ(resp_disks.status_code, 200);
+    EXPECT_EQ(resp_disks.count_header("content-type"), 1U);
+    EXPECT_NE(resp_disks.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 10. Disks collector failure error response (HTTP 500)
+    auto failing_disks_collector =
+        std::make_shared<nodepulse::collectors::DiskCollector>("/nonexistent/proc/mounts");
+    auto failing_disks_service =
+        std::make_shared<nodepulse::services::DiskService>(failing_disks_collector);
+    nodepulse::controllers::DiskController::set_disk_service(failing_disks_service);
+
+    auto resp_disks_500 = send_http_get(kTestHost, kTestPort, "/api/v1/disks");
+    EXPECT_EQ(resp_disks_500.status_code, 500);
+    EXPECT_EQ(resp_disks_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_disks_500.get_header("content-type").find("application/json"),
+              std::string::npos);
+
+    nodepulse::controllers::DiskController::set_disk_service(nullptr);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

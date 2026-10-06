@@ -1,0 +1,4 @@
+/dev/sdb1 /media/USB\040Drive vfat rw,relatime 0 0
+/dev/sdc1 /mnt/Path\040With\040Spaces ext4 rw,relatime 0 0
+/dev/sdd1 /mnt/Tab\011And\134Backslash ext4 rw,relatime 0 0
+

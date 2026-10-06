@@ -90,6 +90,7 @@ struct DiskPartitionMetrics {
     uint64_t total_bytes{0};
     uint64_t used_bytes{0};
     uint64_t free_bytes{0};
+    uint64_t available_bytes{0};
     double usage_percent{0.0};
     uint64_t inodes_total{0};
     uint64_t inodes_free{0};

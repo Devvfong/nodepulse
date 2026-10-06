@@ -1,0 +1,5 @@
+SingleTokenLine
+/dev/sda1
+/dev/sda2 /only/two/tokens
+/dev/nvme0n1p2 / ext4 rw,relatime 0 0
+

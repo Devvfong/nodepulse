@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <nodepulse/controllers/cpu_controller.hpp>
+#include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
@@ -54,6 +55,13 @@ void Server::setup() {
     if (config_.collectors.cpu.enabled) {
         controllers::CpuController::get_cpu_service()->start_sampling(
             std::chrono::milliseconds(config_.collectors.cpu.sample_interval_ms));
+    }
+
+    if (config_.collectors.disks.enabled) {
+        auto collector = std::make_shared<collectors::DiskCollector>(
+            "/proc/mounts", config_.collectors.disks.ignored_fstypes);
+        auto service = std::make_shared<services::DiskService>(collector);
+        controllers::DiskController::set_disk_service(service);
     }
 
     drogon::app().addListener(config_.server.host, config_.server.port);

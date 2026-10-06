@@ -55,6 +55,7 @@ classDiagram
         +UInt64 totalBytes
         +UInt64 usedBytes
         +UInt64 freeBytes
+        +UInt64 availableBytes
         +Double usagePercent
         +UInt64 inodesTotal
         +UInt64 inodesFree

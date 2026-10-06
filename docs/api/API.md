@@ -115,7 +115,7 @@ This document defines the complete API contracts for NodePulse under the initial
 
 ### 4. Memory Telemetry
 - **`GET /api/v1/memory`**
-- **Auth**: `X-API-Key` required
+- **Auth**: `X-API-Key` required (enforced starting in Phase 9; unauthenticated on loopback prior to Phase 9)
 - **Response 200 OK**:
   ```json
   {
@@ -133,14 +133,14 @@ This document defines the complete API contracts for NodePulse under the initial
   }
   ```
 - **Error Responses**:
-  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid.
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid (enforced starting in Phase 9).
   - `500 COLLECTOR_FAILURE`: If `/proc/meminfo` cannot be read or parsed.
 
 ---
 
 ### 5. Filesystem & Disks
 - **`GET /api/v1/disks`**
-- **Auth**: `X-API-Key` required
+- **Auth**: `X-API-Key` required (enforced starting in Phase 9; unauthenticated on loopback prior to Phase 9)
 - **Response 200 OK**:
   ```json
   [
@@ -151,12 +151,16 @@ This document defines the complete API contracts for NodePulse under the initial
       "total_bytes": 536870912000,
       "used_bytes": 107374182400,
       "free_bytes": 429496729600,
+      "available_bytes": 408021893120,
       "usage_percent": 20.0,
       "inodes_total": 32768000,
       "inodes_free": 31200000
     }
   ]
   ```
+- **Error Responses**:
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid (enforced starting in Phase 9).
+  - `500 COLLECTOR_FAILURE`: If `/proc/mounts` cannot be read or parsed.
 
 ---
 

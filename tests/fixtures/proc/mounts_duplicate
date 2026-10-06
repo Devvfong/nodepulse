@@ -1,0 +1,5 @@
+/dev/sda1 /mnt ext4 rw,relatime 0 0
+/dev/sdb1 /mnt ext4 rw,relatime 0 0
+/dev/sdc1 /data ext4 rw,relatime 0 0
+/dev/sdc1 /data ext4 rw,relatime 0 0
+
