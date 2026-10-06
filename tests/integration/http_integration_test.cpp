@@ -14,6 +14,7 @@
 
 #include <nodepulse/collectors/cpu_collector.hpp>
 #include <nodepulse/collectors/disk_collector.hpp>
+#include <nodepulse/collectors/docker_collector.hpp>
 #include <nodepulse/collectors/memory_collector.hpp>
 #include <nodepulse/collectors/network_collector.hpp>
 #include <nodepulse/collectors/process_collector.hpp>
@@ -22,6 +23,8 @@
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/disk_controller.hpp>
+#include <nodepulse/controllers/docker_controller.hpp>
+#include <nodepulse/controllers/events_controller.hpp>
 #include <nodepulse/controllers/memory_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
@@ -31,10 +34,12 @@
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
+#include <nodepulse/services/docker_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/network_service.hpp>
 #include <nodepulse/services/process_service.hpp>
 #include <nodepulse/services/service_manager_service.hpp>
+#include <nodepulse/services/stream_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -1328,10 +1333,18 @@ TEST_F(HttpIntegrationTest, HealthEndpointExemptFromAuthentication) {
 }
 
 TEST_F(HttpIntegrationTest, AllOperationalEndpointsRejectMissingApiKey) {
-    const std::vector<std::string> operational_paths = {
-        "/api/v1/system",      "/api/v1/cpu",      "/api/v1/memory",
-        "/api/v1/disks",       "/api/v1/network",  "/api/v1/processes",
-        "/api/v1/processes/1", "/api/v1/services", "/api/v1/services/test.service"};
+    const std::vector<std::string> operational_paths = {"/api/v1/system",
+                                                        "/api/v1/cpu",
+                                                        "/api/v1/memory",
+                                                        "/api/v1/disks",
+                                                        "/api/v1/network",
+                                                        "/api/v1/processes",
+                                                        "/api/v1/processes/1",
+                                                        "/api/v1/services",
+                                                        "/api/v1/services/test.service",
+                                                        "/api/v1/containers",
+                                                        "/api/v1/containers/test1234",
+                                                        "/api/v1/events"};
 
     for (const auto& path : operational_paths) {
         auto resp = send_http_get(kTestHost, kTestPort, path);
@@ -1358,10 +1371,18 @@ TEST_F(HttpIntegrationTest, AllOperationalEndpointsRejectInvalidApiKey) {
     const std::unordered_map<std::string, std::string> invalid_header = {
         {"X-API-Key", "wrong_api_key_np_invalid"}};
 
-    const std::vector<std::string> operational_paths = {
-        "/api/v1/system",      "/api/v1/cpu",      "/api/v1/memory",
-        "/api/v1/disks",       "/api/v1/network",  "/api/v1/processes",
-        "/api/v1/processes/1", "/api/v1/services", "/api/v1/services/test.service"};
+    const std::vector<std::string> operational_paths = {"/api/v1/system",
+                                                        "/api/v1/cpu",
+                                                        "/api/v1/memory",
+                                                        "/api/v1/disks",
+                                                        "/api/v1/network",
+                                                        "/api/v1/processes",
+                                                        "/api/v1/processes/1",
+                                                        "/api/v1/services",
+                                                        "/api/v1/services/test.service",
+                                                        "/api/v1/containers",
+                                                        "/api/v1/containers/test1234",
+                                                        "/api/v1/events"};
 
     for (const auto& path : operational_paths) {
         auto resp = send_http_get(kTestHost, kTestPort, path, invalid_header);
@@ -1621,6 +1642,488 @@ TEST_F(HttpIntegrationTest, RateLimitDisabledPassesAllBursts) {
         auto resp = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
         EXPECT_EQ(resp.status_code, 200) << "Request " << i << " failed with disabled rate limit";
     }
+}
+
+namespace {
+
+class MockIntegrationDockerTransport : public nodepulse::collectors::IDockerTransport {
+  public:
+    nodepulse::collectors::DockerHttpResponse get(const std::string& path) override {
+        if (path == "/containers/json?all=1") {
+            nlohmann::json j = nlohmann::json::array(
+                {{{"Id", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+                  {"Names", {"/redis-cache"}},
+                  {"Image", "redis:7-alpine"},
+                  {"Status", "Up 3 days"},
+                  {"State", "running"},
+                  {"Created", 1727952000}}});
+            return {nodepulse::collectors::DockerTransportStatus::kOk, 200, j.dump(), ""};
+        }
+        if (path == "/containers/e3b0c44298fc/json") {
+            nlohmann::json j = {
+                {"Id", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+                {"Name", "/redis-cache"},
+                {"Config", {{"Image", "redis:7-alpine"}}},
+                {"Status", "Up 3 days"},
+                {"State", {{"Status", "running"}, {"Running", true}, {"ExitCode", 0}}},
+                {"NetworkSettings",
+                 {{"Ports",
+                   {{"6379/tcp",
+                     nlohmann::json::array({{{"HostIp", "0.0.0.0"}, {"HostPort", "6379"}}})}}}}},
+                {"Mounts", nlohmann::json::array({{{"Source", "/var/data/redis"}}})},
+                {"Created", 1727952000}};
+            return {nodepulse::collectors::DockerTransportStatus::kOk, 200, j.dump(), ""};
+        }
+        if (path == "/containers/unknown999/json") {
+            return {nodepulse::collectors::DockerTransportStatus::kOk, 404,
+                    "{\"message\":\"not found\"}", ""};
+        }
+        return {nodepulse::collectors::DockerTransportStatus::kSocketNotFound, 0, "", "not found"};
+    }
+};
+
+}  // namespace
+
+TEST_F(HttpIntegrationTest, DockerEndpointsReturn503WhenDockerUnavailable) {
+    auto disabled_transport = std::make_shared<nodepulse::collectors::DockerUnixSocketTransport>(
+        "/var/run/docker.sock", 1000, false);
+    auto disabled_collector = std::make_shared<nodepulse::collectors::DockerCollector>(
+        disabled_transport, "/var/run/docker.sock");
+    auto disabled_service =
+        std::make_shared<nodepulse::services::DockerService>(disabled_collector);
+    nodepulse::controllers::DockerController::set_docker_service(disabled_service);
+
+    // List
+    auto resp_list = send_auth_get(kTestHost, kTestPort, "/api/v1/containers");
+    EXPECT_EQ(resp_list.status_code, 503);
+    EXPECT_EQ(resp_list.count_header("content-type"), 1U);
+    EXPECT_TRUE(resp_list.has_header("x-request-id"));
+    auto json_list = nlohmann::json::parse(resp_list.body);
+    EXPECT_EQ(json_list["error"]["code"], "DOCKER_UNAVAILABLE");
+    EXPECT_TRUE(json_list["error"]["details"].is_array());
+    ASSERT_FALSE(json_list["error"]["details"].empty());
+    EXPECT_EQ(json_list["error"]["details"][0]["socket_path"], "/var/run/docker.sock");
+
+    // Detail
+    auto resp_detail = send_auth_get(kTestHost, kTestPort, "/api/v1/containers/test1234");
+    EXPECT_EQ(resp_detail.status_code, 503);
+    auto json_detail = nlohmann::json::parse(resp_detail.body);
+    EXPECT_EQ(json_detail["error"]["code"], "DOCKER_UNAVAILABLE");
+
+    nodepulse::controllers::DockerController::set_docker_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, DockerContainerDetailRejectsInvalidIdentifier) {
+    auto resp1 = send_auth_get(kTestHost, kTestPort, "/api/v1/containers/invalid..identifier");
+    EXPECT_EQ(resp1.status_code, 400);
+    auto json1 = nlohmann::json::parse(resp1.body);
+    EXPECT_EQ(json1["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(json1["error"]["details"][0]["field"], "id");
+
+    auto resp2 = send_auth_get(kTestHost, kTestPort, "/api/v1/containers/invalid!identifier");
+    EXPECT_EQ(resp2.status_code, 400);
+    auto json2 = nlohmann::json::parse(resp2.body);
+    EXPECT_EQ(json2["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(json2["error"]["details"][0]["field"], "id");
+}
+
+TEST_F(HttpIntegrationTest, DockerEndpointsReturn200AndValidSchemaWithMockService) {
+    auto transport = std::make_shared<MockIntegrationDockerTransport>();
+    auto collector =
+        std::make_shared<nodepulse::collectors::DockerCollector>(transport, "/var/run/docker.sock");
+    auto service = std::make_shared<nodepulse::services::DockerService>(collector);
+    nodepulse::controllers::DockerController::set_docker_service(service);
+
+    // List endpoint
+    auto resp_list = send_auth_get(kTestHost, kTestPort, "/api/v1/containers");
+    EXPECT_EQ(resp_list.status_code, 200);
+    EXPECT_EQ(resp_list.count_header("content-type"), 1U);
+    EXPECT_TRUE(resp_list.has_header("x-request-id"));
+    auto json_list = nlohmann::json::parse(resp_list.body);
+    ASSERT_TRUE(json_list.is_array());
+    ASSERT_EQ(json_list.size(), 1);
+    EXPECT_EQ(json_list[0]["id"],
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    EXPECT_EQ(json_list[0]["names"], std::vector<std::string>{"/redis-cache"});
+    EXPECT_EQ(json_list[0]["image"], "redis:7-alpine");
+    EXPECT_EQ(json_list[0]["status"], "Up 3 days");
+    EXPECT_EQ(json_list[0]["state"], "running");
+    EXPECT_EQ(json_list[0]["created"], 1727952000ULL);
+
+    // Detail endpoint
+    auto resp_detail = send_auth_get(kTestHost, kTestPort, "/api/v1/containers/e3b0c44298fc");
+    EXPECT_EQ(resp_detail.status_code, 200);
+    EXPECT_EQ(resp_detail.count_header("content-type"), 1U);
+    EXPECT_TRUE(resp_detail.has_header("x-request-id"));
+    auto json_detail = nlohmann::json::parse(resp_detail.body);
+    ASSERT_TRUE(json_detail.is_object());
+    EXPECT_EQ(json_detail["id"],
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    EXPECT_EQ(json_detail["name"], "/redis-cache");
+    EXPECT_EQ(json_detail["image"], "redis:7-alpine");
+    EXPECT_EQ(json_detail["status"], "Up 3 days");
+    EXPECT_EQ(json_detail["state"], "running");
+    EXPECT_TRUE(json_detail["running"].get<bool>());
+    EXPECT_EQ(json_detail["exit_code"], 0);
+    EXPECT_EQ(json_detail["port_mappings"], std::vector<std::string>{"0.0.0.0:6379->6379/tcp"});
+    EXPECT_EQ(json_detail["mount_sources"], std::vector<std::string>{"/var/data/redis"});
+    EXPECT_EQ(json_detail["created"], 1727952000ULL);
+
+    // Not found
+    auto resp_404 = send_auth_get(kTestHost, kTestPort, "/api/v1/containers/unknown999");
+    EXPECT_EQ(resp_404.status_code, 404);
+    auto json_404 = nlohmann::json::parse(resp_404.body);
+    EXPECT_EQ(json_404["error"]["code"], "RESOURCE_NOT_FOUND");
+    EXPECT_EQ(json_404["error"]["details"][0]["resource_type"], "container");
+    EXPECT_EQ(json_404["error"]["details"][0]["identifier"], "unknown999");
+
+    nodepulse::controllers::DockerController::set_docker_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ConcurrentDockerEndpointRequests) {
+    auto transport = std::make_shared<MockIntegrationDockerTransport>();
+    auto collector =
+        std::make_shared<nodepulse::collectors::DockerCollector>(transport, "/var/run/docker.sock");
+    auto service = std::make_shared<nodepulse::services::DockerService>(collector);
+    nodepulse::controllers::DockerController::set_docker_service(service);
+
+    constexpr int kThreads = 12;
+    std::vector<std::future<int>> futures;
+    for (int i = 0; i < kThreads; ++i) {
+        futures.push_back(std::async(std::launch::async, [i]() {
+            std::string path =
+                (i % 2 == 0) ? "/api/v1/containers" : "/api/v1/containers/e3b0c44298fc";
+            auto resp = send_auth_get(kTestHost, kTestPort, path);
+            return resp.status_code;
+        }));
+    }
+
+    for (auto& f : futures) {
+        EXPECT_EQ(f.get(), 200);
+    }
+
+    nodepulse::controllers::DockerController::set_docker_service(nullptr);
+}
+
+// =============================================================================
+// SSE Live Metrics Streaming Integration Tests (Phase 12)
+// =============================================================================
+
+namespace {
+
+struct SseStreamResult {
+    int status_code{0};
+    std::unordered_map<std::string, std::string> headers;
+    std::vector<std::string> raw_frames;
+    std::string unparsed_body;
+};
+
+inline SseStreamResult connect_and_read_sse(
+    const std::string& host, uint16_t port, const std::string& path,
+    const std::unordered_map<std::string, std::string>& custom_headers, size_t min_frames,
+    std::chrono::milliseconds timeout) {
+    SseStreamResult result;
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return result;
+    }
+
+    struct timeval tv {};
+    tv.tv_sec = static_cast<time_t>(timeout.count() / 1000);
+    tv.tv_usec = static_cast<suseconds_t>((timeout.count() % 1000) * 1000);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    sockaddr_in server_addr{};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
+
+    if (connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
+        close(sock);
+        return result;
+    }
+
+    std::ostringstream req;
+    req << "GET " << path << " HTTP/1.1\r\n"
+        << "Host: " << host << ":" << port << "\r\n"
+        << "Accept: text/event-stream\r\n"
+        << "Connection: keep-alive\r\n";
+    for (const auto& [k, v] : custom_headers) {
+        req << k << ": " << v << "\r\n";
+    }
+    req << "\r\n";
+
+    std::string req_str = req.str();
+    if (send(sock, req_str.data(), req_str.size(), 0) < 0) {
+        close(sock);
+        return result;
+    }
+
+    std::string raw_buffer;
+    char buf[2048];
+    size_t header_end_pos = std::string::npos;
+
+    while (header_end_pos == std::string::npos) {
+        ssize_t n = recv(sock, buf, sizeof(buf), 0);
+        if (n <= 0) {
+            break;
+        }
+        raw_buffer.append(buf, static_cast<size_t>(n));
+        header_end_pos = raw_buffer.find("\r\n\r\n");
+    }
+
+    if (header_end_pos == std::string::npos) {
+        close(sock);
+        return result;
+    }
+
+    std::string header_part = raw_buffer.substr(0, header_end_pos);
+    std::string body_part = raw_buffer.substr(header_end_pos + 4);
+
+    std::istringstream h_stream(header_part);
+    std::string status_line;
+    if (std::getline(h_stream, status_line)) {
+        std::istringstream s_stream(status_line);
+        std::string http_ver;
+        s_stream >> http_ver >> result.status_code;
+    }
+
+    std::string h_line;
+    while (std::getline(h_stream, h_line)) {
+        if (!h_line.empty() && h_line.back() == '\r') {
+            h_line.pop_back();
+        }
+        auto colon = h_line.find(':');
+        if (colon != std::string::npos) {
+            std::string key = h_line.substr(0, colon);
+            std::string val = h_line.substr(colon + 1);
+            while (!val.empty() && (val.front() == ' ' || val.front() == '\t'))
+                val.erase(0, 1);
+            std::string lower_key;
+            for (char c : key)
+                lower_key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            result.headers[lower_key] = val;
+        }
+    }
+
+    auto start_time = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start_time < timeout) {
+        size_t count = 0;
+        size_t pos = 0;
+        while ((pos = body_part.find("event: metric_pulse", pos)) != std::string::npos) {
+            ++count;
+            pos += 19;
+        }
+        if (count >= min_frames) {
+            break;
+        }
+        ssize_t n = recv(sock, buf, sizeof(buf), 0);
+        if (n <= 0) {
+            break;
+        }
+        body_part.append(buf, static_cast<size_t>(n));
+    }
+
+    size_t f_pos = 0;
+    while (true) {
+        size_t ev_pos = body_part.find("event: metric_pulse", f_pos);
+        if (ev_pos == std::string::npos) {
+            break;
+        }
+        size_t d_end = body_part.find("\n\n", ev_pos);
+        if (d_end == std::string::npos) {
+            break;
+        }
+        result.raw_frames.push_back(body_part.substr(ev_pos, d_end - ev_pos));
+        f_pos = d_end + 2;
+    }
+
+    result.unparsed_body = body_part;
+    close(sock);
+    return result;
+}
+
+}  // namespace
+
+TEST_F(HttpIntegrationTest, SseEndpointReturns200WithTextEventStreamHeadersAndFrames) {
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+    auto result = connect_and_read_sse(kTestHost, kTestPort, "/api/v1/events", auth_headers, 2,
+                                       std::chrono::milliseconds(3000));
+
+    EXPECT_EQ(result.status_code, 200);
+    EXPECT_NE(result.headers["content-type"].find("text/event-stream"), std::string::npos);
+    EXPECT_EQ(result.headers["cache-control"], "no-cache");
+    EXPECT_EQ(result.headers["connection"], "keep-alive");
+    EXPECT_FALSE(result.headers["x-request-id"].empty());
+
+    ASSERT_GE(result.raw_frames.size(), 1U);
+    for (const auto& frame : result.raw_frames) {
+        EXPECT_NE(frame.find("event: metric_pulse"), std::string::npos);
+        EXPECT_NE(frame.find("data: {"), std::string::npos);
+
+        auto data_pos = frame.find("data: ");
+        ASSERT_NE(data_pos, std::string::npos);
+        std::string json_str = frame.substr(data_pos + 6);
+        auto j = nlohmann::json::parse(json_str);
+
+        EXPECT_TRUE(j.contains("timestamp"));
+        EXPECT_FALSE(j["timestamp"].get<std::string>().empty());
+        EXPECT_TRUE(j.contains("memory_usage_percent"));
+        EXPECT_TRUE(j.contains("memory_used_bytes"));
+        EXPECT_TRUE(j.contains("cpu_usage_percent"));
+        EXPECT_TRUE(j.contains("network_rx_bytes_sec"));
+        EXPECT_TRUE(j.contains("network_tx_bytes_sec"));
+    }
+}
+
+TEST_F(HttpIntegrationTest, SseEndpointRateLimitExceededReturns429WithStandardEnvelope) {
+    nodepulse::config::RateLimitConfig tight_cfg;
+    tight_cfg.enabled = true;
+    tight_cfg.burst_capacity = 2;
+    tight_cfg.requests_per_minute = 120;
+    nodepulse::middleware::RateLimitFilter::init(tight_cfg);
+
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+
+    // Consume burst quota
+    auto r1 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(r1.status_code, 200);
+    auto r2 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(r2.status_code, 200);
+
+    // 3rd request to /api/v1/events must be rejected with 429
+    auto r3 = send_http_get(kTestHost, kTestPort, "/api/v1/events", auth_headers);
+    EXPECT_EQ(r3.status_code, 429);
+    EXPECT_TRUE(r3.has_header("retry-after"));
+    EXPECT_NE(r3.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto j3 = nlohmann::json::parse(r3.body);
+    EXPECT_EQ(j3["error"]["code"], "RATE_LIMITED");
+
+    // TearDown restores default rate limit config
+}
+
+TEST_F(HttpIntegrationTest, SseEndpointMultipleConcurrentClientsAndCleanDisconnect) {
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+
+    auto future1 = std::async(std::launch::async, [&]() {
+        return connect_and_read_sse(kTestHost, kTestPort, "/api/v1/events", auth_headers, 1,
+                                    std::chrono::milliseconds(2500));
+    });
+    auto future2 = std::async(std::launch::async, [&]() {
+        return connect_and_read_sse(kTestHost, kTestPort, "/api/v1/events", auth_headers, 1,
+                                    std::chrono::milliseconds(2500));
+    });
+
+    auto res1 = future1.get();
+    auto res2 = future2.get();
+
+    EXPECT_EQ(res1.status_code, 200);
+    EXPECT_EQ(res2.status_code, 200);
+    EXPECT_GE(res1.raw_frames.size(), 1U);
+    EXPECT_GE(res2.raw_frames.size(), 1U);
+}
+
+TEST_F(HttpIntegrationTest, SseEndpointRestResponsivenessWhileStreaming) {
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+
+    std::atomic<bool> stop_streaming{false};
+    auto streaming_future = std::async(std::launch::async, [&]() {
+        return connect_and_read_sse(kTestHost, kTestPort, "/api/v1/events", auth_headers, 2,
+                                    std::chrono::milliseconds(2500));
+    });
+
+    // While client is streaming, standard REST endpoints must respond promptly
+    for (int i = 0; i < 5; ++i) {
+        auto resp_health = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+        EXPECT_EQ(resp_health.status_code, 200);
+
+        auto resp_sys = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+        EXPECT_EQ(resp_sys.status_code, 200);
+
+        auto resp_cpu = send_auth_get(kTestHost, kTestPort, "/api/v1/cpu");
+        EXPECT_EQ(resp_cpu.status_code, 200);
+
+        auto resp_mem = send_auth_get(kTestHost, kTestPort, "/api/v1/memory");
+        EXPECT_EQ(resp_mem.status_code, 200);
+    }
+
+    auto sse_res = streaming_future.get();
+    EXPECT_EQ(sse_res.status_code, 200);
+    EXPECT_GE(sse_res.raw_frames.size(), 1U);
+}
+
+TEST_F(HttpIntegrationTest, SseEndpointDisabledReturns503) {
+    auto original_service = nodepulse::controllers::EventsController::get_stream_service();
+
+    nodepulse::config::SseConfig disabled_cfg;
+    disabled_cfg.enabled = false;
+    auto disabled_service = std::make_shared<nodepulse::services::StreamService>(
+        nullptr, nullptr, nullptr, disabled_cfg);
+    nodepulse::controllers::EventsController::set_stream_service(disabled_service);
+
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/events", auth_headers);
+
+    EXPECT_EQ(resp.status_code, 503);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["error"]["code"], "SERVICE_UNAVAILABLE");
+
+    nodepulse::controllers::EventsController::set_stream_service(original_service);
+}
+
+class DummyTestSseClient : public nodepulse::services::ISseClient {
+  public:
+    bool send_data(const std::string&) override {
+        return true;
+    }
+    void close() override {
+        alive_ = false;
+    }
+    [[nodiscard]] bool is_alive() const override {
+        return alive_;
+    }
+
+  private:
+    std::atomic<bool> alive_{true};
+};
+
+TEST_F(HttpIntegrationTest,
+       SseEndpointCapacityExhaustionReturns503WithStandardEnvelopeAndSingleContentType) {
+    auto original_service = nodepulse::controllers::EventsController::get_stream_service();
+
+    nodepulse::config::SseConfig cap_cfg;
+    cap_cfg.enabled = true;
+    cap_cfg.interval_ms = 1000;
+    cap_cfg.max_clients = 2;
+
+    auto cap_service =
+        std::make_shared<nodepulse::services::StreamService>(nullptr, nullptr, nullptr, cap_cfg);
+    EXPECT_TRUE(cap_service->try_add_client(std::make_shared<DummyTestSseClient>()));
+    EXPECT_TRUE(cap_service->try_add_client(std::make_shared<DummyTestSseClient>()));
+    EXPECT_EQ(cap_service->active_slot_count(), 2U);
+
+    nodepulse::controllers::EventsController::set_stream_service(cap_service);
+
+    std::unordered_map<std::string, std::string> auth_headers = {{"X-API-Key", kValidApiKey}};
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/events", auth_headers);
+
+    EXPECT_EQ(resp.status_code, 503);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    EXPECT_FALSE(resp.get_header("x-request-id").empty());
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["error"]["code"], "SERVICE_UNAVAILABLE");
+    EXPECT_EQ(j["error"]["message"], "SSE connection capacity is currently exhausted.");
+
+    nodepulse::controllers::EventsController::set_stream_service(original_service);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

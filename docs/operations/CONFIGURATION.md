@@ -53,7 +53,8 @@ NodePulse employs a hierarchical configuration model:
   },
   "sse": {
     "enabled": true,
-    "interval_ms": 1000
+    "interval_ms": 1000,
+    "max_clients": 64
   },
   "prometheus": {
     "enabled": true,
@@ -82,6 +83,7 @@ NodePulse employs a hierarchical configuration model:
 | `NODEPULSE_RATE_LIMIT` | `rate_limiting.requests_per_minute` | `120` | Requests allowed per minute per IP |
 | `NODEPULSE_DOCKER_ENABLED`| `collectors.docker.enabled` | `false` | Enable Docker socket inspection |
 | `NODEPULSE_DOCKER_SOCKET` | `collectors.docker.socket_path` | `/var/run/docker.sock` | Path to Docker Unix domain socket |
+| `NODEPULSE_SSE_MAX_CLIENTS` | `sse.max_clients` | `64` | Maximum concurrent active SSE subscriber connections |
 | `NODEPULSE_PROMETHEUS_AUTH` | `prometheus.require_auth` | `true` | Secure-by-default; set `false` to permit unauthenticated scrapes |
 
 ---

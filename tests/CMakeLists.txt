@@ -18,6 +18,8 @@ add_executable(tests_unit
     unit/security_test.cpp
     unit/auth_filter_test.cpp
     unit/rate_limit_filter_test.cpp
+    unit/docker_collector_test.cpp
+    unit/stream_service_test.cpp
 )
 
 target_link_libraries(tests_unit

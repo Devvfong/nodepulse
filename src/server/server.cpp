@@ -7,8 +7,11 @@
 #include <drogon/utils/Utilities.h>
 #include <nlohmann/json.hpp>
 
+#include <nodepulse/collectors/docker_collector.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/disk_controller.hpp>
+#include <nodepulse/controllers/docker_controller.hpp>
+#include <nodepulse/controllers/events_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
@@ -16,6 +19,9 @@
 #include <nodepulse/middleware/auth_filter.hpp>
 #include <nodepulse/middleware/rate_limit_filter.hpp>
 #include <nodepulse/server/server.hpp>
+#include <nodepulse/services/docker_service.hpp>
+#include <nodepulse/services/memory_service.hpp>
+#include <nodepulse/services/stream_service.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -84,6 +90,22 @@ void Server::setup() {
     if (config_.collectors.processes.enabled) {
         controllers::ProcessController::get_process_service()->start_sampling(
             std::chrono::milliseconds(1000));
+    }
+
+    auto docker_transport = std::make_shared<collectors::DockerUnixSocketTransport>(
+        config_.collectors.docker.socket_path, config_.collectors.docker.timeout_ms,
+        config_.collectors.docker.enabled);
+    auto docker_collector = std::make_shared<collectors::DockerCollector>(
+        docker_transport, config_.collectors.docker.socket_path);
+    auto docker_service = std::make_shared<services::DockerService>(docker_collector);
+    controllers::DockerController::set_docker_service(docker_service);
+
+    auto stream_service = std::make_shared<services::StreamService>(
+        controllers::CpuController::get_cpu_service(), std::make_shared<services::MemoryService>(),
+        controllers::NetworkController::get_network_service(), config_.sse);
+    controllers::EventsController::set_stream_service(stream_service);
+    if (config_.sse.enabled) {
+        stream_service->start_streaming(std::chrono::milliseconds(config_.sse.interval_ms));
     }
 
     drogon::app().addListener(config_.server.host, config_.server.port);
@@ -200,6 +222,9 @@ void Server::run() {
 
 void Server::stop() {
     utils::Logger::get()->info("Stopping NodePulse HTTP server");
+    if (auto stream_svc = controllers::EventsController::get_stream_service()) {
+        stream_svc->stop_streaming();
+    }
     controllers::CpuController::get_cpu_service()->stop_sampling();
     controllers::NetworkController::get_network_service()->stop_sampling();
     controllers::ProcessController::get_process_service()->stop_sampling();

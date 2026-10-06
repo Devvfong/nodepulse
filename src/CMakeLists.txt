@@ -2,6 +2,7 @@ add_library(nodepulse_lib STATIC
     config/config.cpp
     collectors/cpu_collector.cpp
     collectors/disk_collector.cpp
+    collectors/docker_collector.cpp
     collectors/memory_collector.cpp
     collectors/network_collector.cpp
     collectors/process_collector.cpp
@@ -9,6 +10,8 @@ add_library(nodepulse_lib STATIC
     collectors/system_collector.cpp
     controllers/cpu_controller.cpp
     controllers/disk_controller.cpp
+    controllers/docker_controller.cpp
+    controllers/events_controller.cpp
     controllers/health_controller.cpp
     controllers/memory_controller.cpp
     controllers/network_controller.cpp
@@ -17,10 +20,12 @@ add_library(nodepulse_lib STATIC
     controllers/system_controller.cpp
     services/cpu_service.cpp
     services/disk_service.cpp
+    services/docker_service.cpp
     services/memory_service.cpp
     services/network_service.cpp
     services/process_service.cpp
     services/service_manager_service.cpp
+    services/stream_service.cpp
     services/system_service.cpp
     server/server.cpp
     middleware/auth_filter.cpp

@@ -365,6 +365,7 @@ This document defines the complete API contracts for NodePulse under the initial
   data: {"timestamp":"2026-10-06T06:53:50Z","cpu_usage_percent":14.2,"memory_usage_percent":38.1,"memory_used_bytes":6395000000,"network_rx_bytes_sec":12040.0,"network_tx_bytes_sec":45800.0}
 
   ```
+- **Capacity & Admission**: Maximum simultaneous active SSE subscribers is bounded by `sse.max_clients` (default 64). When capacity is exhausted, new connection requests are rejected with HTTP 503 `SERVICE_UNAVAILABLE` and standard JSON error envelope before stream creation. Request-rate exhaustion continues returning HTTP 429 `RATE_LIMITED`.
 
 ---
 

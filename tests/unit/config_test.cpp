@@ -139,4 +139,35 @@ TEST(ConfigTest, LoadFromFileNonExistentThrows) {
     EXPECT_THROW(Config::load_from_file("/path/does/not/exist/config.json"), std::runtime_error);
 }
 
+TEST(ConfigTest, SseMaxClientsDefaultsTo64) {
+    Config cfg;
+    EXPECT_EQ(cfg.sse.max_clients, 64U);
+    EXPECT_TRUE(cfg.validate().empty());
+}
+
+TEST(ConfigTest, SseMaxClientsConfigurationOverride) {
+    nlohmann::json j = {{"sse", {{"enabled", true}, {"interval_ms", 500}, {"max_clients", 128}}}};
+    auto cfg = Config::load_from_json(j);
+    EXPECT_EQ(cfg.sse.max_clients, 128U);
+    EXPECT_TRUE(cfg.validate().empty());
+
+    setenv("NODEPULSE_SSE_MAX_CLIENTS", "256", 1);
+    cfg.apply_env_overrides();
+    EXPECT_EQ(cfg.sse.max_clients, 256U);
+    EXPECT_TRUE(cfg.validate().empty());
+    unsetenv("NODEPULSE_SSE_MAX_CLIENTS");
+}
+
+TEST(ConfigTest, SseMaxClientsValidationRejectsZeroAndOversized) {
+    Config cfg_zero;
+    cfg_zero.sse.max_clients = 0;
+    auto errors_zero = cfg_zero.validate();
+    EXPECT_FALSE(errors_zero.empty());
+
+    Config cfg_huge;
+    cfg_huge.sse.max_clients = 20000;
+    auto errors_huge = cfg_huge.validate();
+    EXPECT_FALSE(errors_huge.empty());
+}
+
 }  // namespace nodepulse::config

@@ -22,6 +22,8 @@ This document consolidates and indexes all foundational architectural, technical
 | **DEC-012** | Deferred PostgreSQL Metric Persistence (Phase 14) | Accepted | 2026-10-06 | Keep core agent lightweight and self-contained; optional persistent storage | [IMPLEMENTATION_PLAN.md](file:///home/devqii/workspace/nodepulse/IMPLEMENTATION_PLAN.md#phase-14--postgresql-metric-history) |
 | **DEC-013** | Worker Thread Pool Offloading for Heavy Subsystem Ops | Accepted | 2026-10-06 | Preserve Drogon event loop responsiveness during intensive /proc scans | [ARCHITECTURE.md](file:///home/devqii/workspace/nodepulse/docs/architecture/ARCHITECTURE.md#3-threading--concurrency-model) |
 | **DEC-014** | CPU Utilization Sampling & First-Sample Contract | Accepted | 2026-10-06 | Deterministic non-blocking delta computation and first-sample contract | [DECISIONS.md](file:///home/devqii/workspace/nodepulse/DECISIONS.md#dec-014-cpu-utilization-sampling--first-sample-contract) |
+| **DEC-015** | Server-Sent Events Keepalive Comments | Accepted | 2026-10-06 | Prevent intermediate proxy/NAT connection timeout on persistent SSE streams | [DECISIONS.md](file:///home/devqii/workspace/nodepulse/DECISIONS.md#dec-015-server-sent-events-keepalive-comments) |
+| **DEC-016** | Server-Sent Events Maximum Client Capacity and Admission Control | Accepted | 2026-10-06 | Bound concurrent open SSE connections to prevent server resource exhaustion | [DECISIONS.md](file:///home/devqii/workspace/nodepulse/DECISIONS.md#dec-016-server-sent-events-maximum-client-capacity-and-admission-control) |
 
 ---
 
@@ -91,6 +93,22 @@ This document consolidates and indexes all foundational architectural, technical
      - `logical_cores` dynamically tracks current active cores from `/proc/stat`. If core count changes (hotplug event), aggregate baseline is reset to `warming_up`. Cores without prior baseline report `usage_percent: null`.
   6. **Thread Safety**: All mutable state is synchronized using `std::mutex` and `std::condition_variable` in `CpuService`.
 - **Consequences**: Deterministic, truthful metrics reporting with zero Drogon event loop starvation.
+
+### DEC-015: Server-Sent Events Keepalive Comments
+- **Context**: Long-lived Server-Sent Events HTTP connections traversing intermediate reverse proxies (e.g. Nginx, Envoy, AWS ALB), corporate gateways, or stateful NAT firewalls are subject to idle connection termination if silent intervals occur or when client consumption experiences backpressure.
+- **Clarification of Architectural Origin**: Keepalive comments (`: keepalive\n\n`) were NOT an externally mandated requirement of the pre-Phase-12 specification, but an intentional internal implementation decision.
+- **Decision**: Under the W3C Server-Sent Events standard, any line beginning with a colon (`:`) is treated as a comment and ignored by client event parsers. NodePulse emits `: keepalive\n\n` comments between telemetry frames or when explicitly triggered to maintain TCP activity across intermediate network middleboxes.
+- **Consequences**: Protocol-compatible with all standard SSE consumers (EventSource, fetch, curl). Does not alter the public `metric_pulse` schema contract.
+
+### DEC-016: Server-Sent Events Maximum Client Capacity and Admission Control
+- **Context**: Server-Sent Events connections are persistent and long-lived. While Phase 10 token-bucket rate limiting restricts the rate of incoming HTTP requests per client IP, it does not limit the total number of concurrently held open connections. Without an application-level bound, legitimate or rogue clients could accumulate open streams and exhaust server file descriptors or memory.
+- **Decision**:
+  1. **Configurable Capacity Limit**: Introduce `sse.max_clients` with a default of 64 concurrent subscribers, validated between 1 and 10000 (`max_clients = 0` is rejected).
+  2. **Atomic Admission Control**: Admission decisions are race-safe via `StreamService::try_reserve_slot()` and `try_add_client()`, guaranteeing that active and reserved subscriber slots never exceed `max_clients` even under high concurrency.
+  3. **Capacity Rejection Error**: When capacity is reached, new connection attempts are rejected before establishing the streaming response with HTTP 503 `SERVICE_UNAVAILABLE` (generic message: `"SSE connection capacity is currently exhausted."`). HTTP 429 remains strictly reserved for Phase 10 request-rate limit exhaustion.
+  4. **Slot Lifecycle & Cleanup**: Slots are released immediately upon client disconnect, send failure, explicit removal, server shutdown, or connection setup rollback. Dead subscribers are automatically pruned upon subsequent admission attempts.
+- **Consequences**: Deterministic, bounded resource consumption for live telemetry streaming with strict isolation from request rate limiting.
+
 
 
 

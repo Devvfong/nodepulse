@@ -34,7 +34,8 @@
   },
   "sse": {
     "enabled": true,
-    "interval_ms": 1000
+    "interval_ms": 1000,
+    "max_clients": 64
   },
   "prometheus": {
     "enabled": true,

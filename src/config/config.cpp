@@ -137,6 +137,9 @@ Config Config::load_from_json(const nlohmann::json& json_data) {
         if (sse_obj.contains("interval_ms")) {
             cfg.sse.interval_ms = sse_obj["interval_ms"].get<uint32_t>();
         }
+        if (sse_obj.contains("max_clients")) {
+            cfg.sse.max_clients = sse_obj["max_clients"].get<uint32_t>();
+        }
     }
 
     if (json_data.contains("prometheus") && json_data["prometheus"].is_object()) {
@@ -227,6 +230,13 @@ void Config::apply_env_overrides() {
     if (auto prom_auth = get_env_var("NODEPULSE_PROMETHEUS_AUTH")) {
         prometheus.require_auth = (*prom_auth == "true" || *prom_auth == "1");
     }
+    if (auto sse_max_str = get_env_var("NODEPULSE_SSE_MAX_CLIENTS")) {
+        try {
+            sse.max_clients = static_cast<uint32_t>(std::stoul(*sse_max_str));
+        } catch (const std::exception&) {
+            sse.max_clients = 0;
+        }
+    }
 }
 
 Config Config::load(const std::optional<std::string>& file_override) {
@@ -305,6 +315,25 @@ std::vector<std::string> Config::validate() const {
 
     if (sse.enabled && sse.interval_ms < 100) {
         errors.emplace_back("sse.interval_ms must be at least 100ms");
+    }
+
+    if (sse.max_clients == 0 || sse.max_clients > 10000) {
+        errors.emplace_back("sse.max_clients must be between 1 and 10000");
+    }
+
+    if (collectors.docker.enabled) {
+        if (collectors.docker.socket_path.empty()) {
+            errors.emplace_back("collectors.docker.socket_path cannot be empty");
+        } else if (collectors.docker.socket_path.starts_with("http://") ||
+                   collectors.docker.socket_path.starts_with("https://") ||
+                   collectors.docker.socket_path.starts_with("tcp://")) {
+            errors.emplace_back(
+                "collectors.docker.socket_path must be a Unix domain socket path, remote "
+                "HTTP/TCP URLs are not allowed");
+        }
+        if (collectors.docker.timeout_ms == 0) {
+            errors.emplace_back("collectors.docker.timeout_ms must be greater than 0");
+        }
     }
 
     return errors;

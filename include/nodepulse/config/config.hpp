@@ -68,6 +68,7 @@ struct CollectorsConfig {
 struct SseConfig {
     bool enabled{true};
     uint32_t interval_ms{1000};
+    uint32_t max_clients{64};
 };
 
 struct PrometheusConfig {
