@@ -3,15 +3,18 @@ add_library(nodepulse_lib STATIC
     collectors/cpu_collector.cpp
     collectors/disk_collector.cpp
     collectors/memory_collector.cpp
+    collectors/network_collector.cpp
     collectors/system_collector.cpp
     controllers/cpu_controller.cpp
     controllers/disk_controller.cpp
     controllers/health_controller.cpp
     controllers/memory_controller.cpp
+    controllers/network_controller.cpp
     controllers/system_controller.cpp
     services/cpu_service.cpp
     services/disk_service.cpp
     services/memory_service.cpp
+    services/network_service.cpp
     services/system_service.cpp
     server/server.cpp
     utils/error_response.cpp

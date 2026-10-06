@@ -10,6 +10,7 @@
 #include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
+#include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -62,6 +63,11 @@ void Server::setup() {
             "/proc/mounts", config_.collectors.disks.ignored_fstypes);
         auto service = std::make_shared<services::DiskService>(collector);
         controllers::DiskController::set_disk_service(service);
+    }
+
+    if (config_.collectors.network.enabled) {
+        controllers::NetworkController::get_network_service()->start_sampling(
+            std::chrono::milliseconds(1000));
     }
 
     drogon::app().addListener(config_.server.host, config_.server.port);
@@ -165,6 +171,7 @@ void Server::run() {
 void Server::stop() {
     utils::Logger::get()->info("Stopping NodePulse HTTP server");
     controllers::CpuController::get_cpu_service()->stop_sampling();
+    controllers::NetworkController::get_network_service()->stop_sampling();
     drogon::app().quit();
 }
 

@@ -166,7 +166,7 @@ This document defines the complete API contracts for NodePulse under the initial
 
 ### 6. Network Telemetry
 - **`GET /api/v1/network`**
-- **Auth**: `X-API-Key` required
+- **Auth**: `X-API-Key` required (enforced starting in Phase 9; unauthenticated on loopback prior to Phase 9)
 - **Response 200 OK**:
   ```json
   [
@@ -186,6 +186,9 @@ This document defines the complete API contracts for NodePulse under the initial
     }
   ]
   ```
+- **Error Responses**:
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid (enforced starting in Phase 9).
+  - `500 COLLECTOR_FAILURE`: If `/proc/net/dev` cannot be read or parsed.
 
 ---
 

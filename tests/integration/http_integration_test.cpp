@@ -15,16 +15,19 @@
 #include <nodepulse/collectors/cpu_collector.hpp>
 #include <nodepulse/collectors/disk_collector.hpp>
 #include <nodepulse/collectors/memory_collector.hpp>
+#include <nodepulse/collectors/network_collector.hpp>
 #include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/memory_controller.hpp>
+#include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
+#include <nodepulse/services/network_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -662,8 +665,92 @@ TEST_F(HttpIntegrationTest, DisksEndpointHandlesCollectorFailureGracefully) {
     nodepulse::controllers::DiskController::set_disk_service(nullptr);
 }
 
-TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
-    constexpr int kNumThreads = 15;
+TEST_F(HttpIntegrationTest, NetworkEndpointReturns200AndValidSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/network");
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    EXPECT_FALSE(resp.get_header("x-request-id").empty());
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.is_array());
+    EXPECT_FALSE(json_body.empty());
+
+    bool found_lo = false;
+    for (const auto& iface : json_body) {
+        ASSERT_TRUE(iface.contains("name"));
+        EXPECT_TRUE(iface["name"].is_string());
+        EXPECT_FALSE(iface["name"].get<std::string>().empty());
+
+        ASSERT_TRUE(iface.contains("mac_address"));
+        EXPECT_TRUE(iface["mac_address"].is_string());
+
+        ASSERT_TRUE(iface.contains("operstate"));
+        EXPECT_TRUE(iface["operstate"].is_string());
+        EXPECT_FALSE(iface["operstate"].get<std::string>().empty());
+
+        ASSERT_TRUE(iface.contains("speed_mbps"));
+        EXPECT_TRUE(iface["speed_mbps"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("rx_bytes"));
+        EXPECT_TRUE(iface["rx_bytes"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("tx_bytes"));
+        EXPECT_TRUE(iface["tx_bytes"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("rx_packets"));
+        EXPECT_TRUE(iface["rx_packets"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("tx_packets"));
+        EXPECT_TRUE(iface["tx_packets"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("rx_errors"));
+        EXPECT_TRUE(iface["rx_errors"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("tx_errors"));
+        EXPECT_TRUE(iface["tx_errors"].is_number_unsigned());
+
+        ASSERT_TRUE(iface.contains("rx_bytes_per_sec"));
+        EXPECT_TRUE(iface["rx_bytes_per_sec"].is_null() || iface["rx_bytes_per_sec"].is_number());
+
+        ASSERT_TRUE(iface.contains("tx_bytes_per_sec"));
+        EXPECT_TRUE(iface["tx_bytes_per_sec"].is_null() || iface["tx_bytes_per_sec"].is_number());
+
+        if (iface["name"].get<std::string>() == "lo") {
+            found_lo = true;
+        }
+    }
+    EXPECT_TRUE(found_lo);
+}
+
+TEST_F(HttpIntegrationTest, NetworkEndpointHandlesCollectorFailureGracefully) {
+    auto failing_collector = std::make_shared<nodepulse::collectors::NetworkCollector>(
+        "/nonexistent/proc/net_dev", "/nonexistent/sys/class/net");
+    auto failing_service = std::make_shared<nodepulse::services::NetworkService>(failing_collector);
+    nodepulse::controllers::NetworkController::set_network_service(failing_service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/network");
+    EXPECT_EQ(resp.status_code, 500);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_FALSE(json_body["error"]["message"].get<std::string>().empty());
+    EXPECT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_EQ(json_body["error"]["details"].size(), 1U);
+    EXPECT_EQ(json_body["error"]["details"][0]["collector"], "network_collector");
+    EXPECT_EQ(json_body["error"]["details"][0]["target_file"], "/proc/net/dev");
+
+    nodepulse::controllers::NetworkController::set_network_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ConcurrentAllEndpointsRequests) {
+    constexpr int kNumThreads = 18;
     constexpr int kRequestsPerThread = 5;
 
     std::vector<std::future<bool>> futures;
@@ -671,16 +758,18 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
         futures.push_back(std::async(std::launch::async, [t]() {
             for (int r = 0; r < kRequestsPerThread; ++r) {
                 std::string path;
-                if (t % 5 == 0) {
+                if (t % 6 == 0) {
                     path = "/api/v1/health";
-                } else if (t % 5 == 1) {
+                } else if (t % 6 == 1) {
                     path = "/api/v1/system";
-                } else if (t % 5 == 2) {
+                } else if (t % 6 == 2) {
                     path = "/api/v1/cpu";
-                } else if (t % 5 == 3) {
+                } else if (t % 6 == 3) {
                     path = "/api/v1/memory";
-                } else {
+                } else if (t % 6 == 4) {
                     path = "/api/v1/disks";
+                } else {
+                    path = "/api/v1/network";
                 }
                 auto resp = send_http_get(kTestHost, kTestPort, path);
                 if (resp.status_code != 200) {
@@ -700,6 +789,10 @@ TEST_F(HttpIntegrationTest, ConcurrentCpuAndSystemAndHealthRequests) {
                         return false;
                     }
                 } else if (path == "/api/v1/disks") {
+                    if (!j.is_array()) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/network") {
                     if (!j.is_array()) {
                         return false;
                     }
@@ -810,6 +903,26 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
               std::string::npos);
 
     nodepulse::controllers::DiskController::set_disk_service(nullptr);
+
+    // 11. Network endpoint (HTTP 200)
+    auto resp_net = send_http_get(kTestHost, kTestPort, "/api/v1/network");
+    EXPECT_EQ(resp_net.status_code, 200);
+    EXPECT_EQ(resp_net.count_header("content-type"), 1U);
+    EXPECT_NE(resp_net.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 12. Network collector failure error response (HTTP 500)
+    auto failing_net_collector = std::make_shared<nodepulse::collectors::NetworkCollector>(
+        "/nonexistent/proc/net_dev", "/nonexistent/sys/class/net");
+    auto failing_net_service =
+        std::make_shared<nodepulse::services::NetworkService>(failing_net_collector);
+    nodepulse::controllers::NetworkController::set_network_service(failing_net_service);
+
+    auto resp_net_500 = send_http_get(kTestHost, kTestPort, "/api/v1/network");
+    EXPECT_EQ(resp_net_500.status_code, 500);
+    EXPECT_EQ(resp_net_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_net_500.get_header("content-type").find("application/json"), std::string::npos);
+
+    nodepulse::controllers::NetworkController::set_network_service(nullptr);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {
