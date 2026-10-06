@@ -1,0 +1,122 @@
+#include <chrono>
+#include <exception>
+#include <functional>
+#include <string>
+
+#include <drogon/drogon.h>
+#include <drogon/utils/Utilities.h>
+#include <nlohmann/json.hpp>
+
+#include <nodepulse/controllers/health_controller.hpp>
+#include <nodepulse/server/server.hpp>
+#include <nodepulse/utils/error_response.hpp>
+#include <nodepulse/utils/logger.hpp>
+
+namespace nodepulse::server {
+
+std::chrono::steady_clock::time_point Server::start_time_ = std::chrono::steady_clock::now();
+
+Server::Server(config::Config config) : config_(std::move(config)) {}
+
+void Server::setup() {
+    start_time_ = std::chrono::steady_clock::now();
+    controllers::HealthController::set_start_time(start_time_);
+
+    drogon::app().addListener(config_.server.host, config_.server.port);
+    drogon::app().setThreadNum(config_.server.threads);
+
+    drogon::app().registerPreRoutingAdvice([](const drogon::HttpRequestPtr& req,
+                                              drogon::AdviceCallback&& /*acb*/,
+                                              drogon::AdviceChainCallback&& accb) {
+        std::string req_id = req->getHeader("X-Request-ID");
+        if (req_id.empty()) {
+            req_id = req->getHeader("x-request-id");
+        }
+        if (req_id.empty()) {
+            req_id = drogon::utils::getUuid();
+        }
+        req->getAttributes()->insert("request_id", req_id);
+        req->getAttributes()->insert("start_time", std::chrono::steady_clock::now());
+        accb();
+    });
+
+    drogon::app().registerPostHandlingAdvice([](const drogon::HttpRequestPtr& req,
+                                                const drogon::HttpResponsePtr& resp) {
+        std::string req_id;
+        if (req && req->getAttributes()) {
+            req_id = req->getAttributes()->get<std::string>("request_id");
+        }
+        if (!req_id.empty() && resp) {
+            resp->addHeader("X-Request-ID", req_id);
+        }
+
+        if (req && resp && req->getAttributes()) {
+            auto req_start =
+                req->getAttributes()->get<std::chrono::steady_clock::time_point>("start_time");
+            auto duration = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - req_start)
+                                .count();
+            utils::Logger::get()->info("HTTP {} {} -> {} ({:.2f}ms) [request_id: {}] [client: {}]",
+                                       req->methodString(), req->path(),
+                                       static_cast<int>(resp->statusCode()), duration, req_id,
+                                       req->peerAddr().toIp());
+        }
+    });
+
+    drogon::app().setDefaultHandler(
+        [](const drogon::HttpRequestPtr& req,
+           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            std::string req_id;
+            if (req && req->getAttributes()) {
+                req_id = req->getAttributes()->get<std::string>("request_id");
+            }
+            auto resp = utils::make_error_response(
+                drogon::k404NotFound, utils::error_codes::kResourceNotFound,
+                "The requested endpoint was not found.", nlohmann::json::array(), req_id);
+            callback(resp);
+        });
+
+    drogon::app().setCustomErrorHandler(
+        [](drogon::HttpStatusCode code, const drogon::HttpRequestPtr& req) {
+            std::string req_id;
+            if (req && req->getAttributes()) {
+                req_id = req->getAttributes()->get<std::string>("request_id");
+            }
+            if (code == drogon::k404NotFound) {
+                return utils::make_error_response(
+                    drogon::k404NotFound, utils::error_codes::kResourceNotFound,
+                    "The requested endpoint was not found.", nlohmann::json::array(), req_id);
+            }
+            return utils::make_error_response(code, utils::error_codes::kInternalError,
+                                              "An unexpected error occurred.",
+                                              nlohmann::json::array(), req_id);
+        });
+
+    drogon::app().setExceptionHandler(
+        [](const std::exception& e, const drogon::HttpRequestPtr& req,
+           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            std::string req_id;
+            if (req && req->getAttributes()) {
+                req_id = req->getAttributes()->get<std::string>("request_id");
+            }
+            utils::Logger::get()->error("Unhandled exception processing request: {}", e.what());
+            auto resp = utils::make_error_response(
+                drogon::k500InternalServerError, utils::error_codes::kInternalError,
+                "An unexpected error occurred processing your request.", nlohmann::json::array(),
+                req_id);
+            callback(resp);
+        });
+}
+
+void Server::run() {
+    utils::Logger::get()->info("Starting NodePulse HTTP server on {}:{} with {} threads",
+                               config_.server.host, config_.server.port, config_.server.threads);
+    drogon::app().run();
+}
+
+void Server::stop() {
+    utils::Logger::get()->info("Stopping NodePulse HTTP server");
+    drogon::app().quit();
+}
+
+}  // namespace nodepulse::server

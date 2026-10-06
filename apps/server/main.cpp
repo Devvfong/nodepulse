@@ -1,36 +1,89 @@
 #include <iostream>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
-#include <drogon/drogon.h>
-#include <nlohmann/json.hpp>
-
+#include <nodepulse/config/config.hpp>
+#include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/logger.hpp>
+
+namespace {
+
+void print_usage(std::string_view program_name) {
+    std::cout << "Usage: " << program_name << " [options]\n\n"
+              << "Options:\n"
+              << "  -h, --help             Show this help message and exit\n"
+              << "  -v, --version          Print version information and exit\n"
+              << "  -c, --config <path>    Specify path to JSON configuration file\n"
+              << "  --validate-config      Validate configuration file and exit\n";
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     try {
-        nodepulse::utils::Logger::init("info");
-        auto logger = nodepulse::utils::Logger::get();
+        std::optional<std::string> config_path;
+        bool validate_only = false;
 
-        const nlohmann::json build_metadata = {{"project", "NodePulse"},
-                                               {"version", "0.1.0"},
-                                               {"phase", "Phase 1 - Repository Foundation"},
-                                               {"drogon_version", drogon::getVersion()}};
+        for (int i = 1; i < argc; ++i) {
+            std::string_view arg(argv[i]);
+            if (arg == "-h" || arg == "--help") {
+                print_usage(argv[0]);
+                return 0;
+            }
+            if (arg == "-v" || arg == "--version") {
+                std::cout << "NodePulse version 0.1.0\n";
+                return 0;
+            }
+            if (arg == "--validate-config") {
+                validate_only = true;
+            } else if ((arg == "-c" || arg == "--config") && i + 1 < argc) {
+                config_path = argv[++i];
+            } else if (arg.starts_with("--config=")) {
+                config_path = arg.substr(9);
+            }
+        }
 
-        logger->info("NodePulse foundation initialized: {}", build_metadata.dump());
+        nodepulse::config::Config config;
+        try {
+            config = nodepulse::config::Config::load(config_path);
+        } catch (const std::exception& ex) {
+            std::cerr << "Configuration load error: " << ex.what() << '\n';
+            return 1;
+        }
 
-        if (argc > 1 && std::string_view(argv[1]) == "--version") {
-            std::cout << "NodePulse version 0.1.0 (Phase 1 Foundation)\n";
+        auto validation_errors = config.validate();
+        if (!validation_errors.empty()) {
+            std::cerr << "Configuration validation failed with " << validation_errors.size()
+                      << " error(s):\n";
+            for (const auto& err : validation_errors) {
+                std::cerr << "  - " << err << '\n';
+            }
+            return 1;
+        }
+
+        if (validate_only) {
+            std::cout << "Configuration is valid.\n";
             return 0;
         }
 
-        logger->info("Build and linkage verification complete. Ready for Phase 2.");
+        nodepulse::utils::Logger::init(config.server.log_level, config.server.log_format == "json");
+        auto logger = nodepulse::utils::Logger::get();
+        logger->info("NodePulse server starting (Phase 2 - HTTP Foundation)");
+
+        nodepulse::server::Server server(std::move(config));
+        server.setup();
+        server.run();
+
+        logger->info("NodePulse server stopped gracefully");
         nodepulse::utils::Logger::shutdown();
         return 0;
     } catch (const std::exception& ex) {
-        std::cerr << "Fatal error during startup: " << ex.what() << '\n';
+        std::cerr << "Fatal error: " << ex.what() << '\n';
         return 1;
     } catch (...) {
-        std::cerr << "Unknown fatal error during startup\n";
+        std::cerr << "Fatal unknown error\n";
         return 1;
     }
 }
