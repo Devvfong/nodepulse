@@ -24,7 +24,6 @@ void HealthController::get_health(const drogon::HttpRequestPtr& req,
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setStatusCode(drogon::k200OK);
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-    resp->addHeader("Content-Type", "application/json");
     resp->setBody(body.dump());
 
     if (req && req->getAttributes()) {

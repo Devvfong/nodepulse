@@ -3,6 +3,7 @@ add_executable(tests_unit
     unit/smoke_test.cpp
     unit/config_test.cpp
     unit/error_response_test.cpp
+    unit/system_collector_test.cpp
 )
 
 target_link_libraries(tests_unit
@@ -14,6 +15,7 @@ target_link_libraries(tests_unit
 )
 
 target_compile_features(tests_unit PRIVATE cxx_std_20)
+target_compile_definitions(tests_unit PRIVATE NODEPULSE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 if(WARNINGS_AS_ERRORS)
     target_compile_options(tests_unit PRIVATE -Wall -Wextra -Wpedantic -Werror)

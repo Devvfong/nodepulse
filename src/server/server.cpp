@@ -14,11 +14,35 @@
 
 namespace nodepulse::server {
 
+namespace {
+
+bool is_valid_request_id(std::string_view id) noexcept {
+    if (id.empty() || id.length() > 64) {
+        return false;
+    }
+    for (char c : id) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '-' || c == '_' || c == '.')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
 std::chrono::steady_clock::time_point Server::start_time_ = std::chrono::steady_clock::now();
 
 Server::Server(config::Config config) : config_(std::move(config)) {}
 
 void Server::setup() {
+    if (config_.server.host != "127.0.0.1" && config_.server.host != "::1" &&
+        config_.server.host != "localhost") {
+        throw std::runtime_error(
+            "Binding to non-loopback address ('" + config_.server.host +
+            "') is rejected: authentication is not implemented prior to Phase 9.");
+    }
+
     start_time_ = std::chrono::steady_clock::now();
     controllers::HealthController::set_start_time(start_time_);
 
@@ -32,7 +56,7 @@ void Server::setup() {
         if (req_id.empty()) {
             req_id = req->getHeader("x-request-id");
         }
-        if (req_id.empty()) {
+        if (!is_valid_request_id(req_id)) {
             req_id = drogon::utils::getUuid();
         }
         req->getAttributes()->insert("request_id", req_id);
@@ -109,6 +133,12 @@ void Server::setup() {
 }
 
 void Server::run() {
+    if (config_.server.host != "127.0.0.1" && config_.server.host != "::1" &&
+        config_.server.host != "localhost") {
+        throw std::runtime_error(
+            "Binding to non-loopback address ('" + config_.server.host +
+            "') is rejected: authentication is not implemented prior to Phase 9.");
+    }
     utils::Logger::get()->info("Starting NodePulse HTTP server on {}:{} with {} threads",
                                config_.server.host, config_.server.port, config_.server.threads);
     drogon::app().run();

@@ -42,7 +42,7 @@ TEST(ErrorResponseTest, CreatesHttpResponseWithHeaders) {
                                     "Not Found", nlohmann::json::array(), "req-id-uuid-12345");
 
     EXPECT_EQ(resp->statusCode(), drogon::k404NotFound);
-    EXPECT_EQ(resp->getHeader("Content-Type"), "application/json");
+    EXPECT_EQ(resp->contentType(), drogon::CT_APPLICATION_JSON);
     EXPECT_EQ(resp->getHeader("X-Request-ID"), "req-id-uuid-12345");
 
     auto parsed = nlohmann::json::parse(resp->getBody());

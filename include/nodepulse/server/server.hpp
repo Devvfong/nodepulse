@@ -35,4 +35,3 @@ class Server {
 };
 
 }  // namespace nodepulse::server
-

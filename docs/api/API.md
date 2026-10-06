@@ -56,6 +56,9 @@ This document defines the complete API contracts for NodePulse under the initial
     "uptime_seconds": 86400.0
   }
   ```
+- **Error Responses**:
+  - `401 UNAUTHORIZED`: If `X-API-Key` is missing or invalid.
+  - `500 COLLECTOR_FAILURE`: If system metrics cannot be collected due to `/proc` reading failure.
 
 ---
 

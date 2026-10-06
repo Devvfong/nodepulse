@@ -12,8 +12,11 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
+#include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
+#include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
 #include <arpa/inet.h>
@@ -26,6 +29,7 @@ namespace {
 struct SimpleHttpResponse {
     int status_code{0};
     std::unordered_map<std::string, std::string> headers;
+    std::vector<std::pair<std::string, std::string>> all_headers;
     std::string body;
 
     [[nodiscard]] std::string get_header(std::string_view name) const {
@@ -43,6 +47,21 @@ struct SimpleHttpResponse {
 
     [[nodiscard]] bool has_header(std::string_view name) const {
         return !get_header(name).empty();
+    }
+
+    [[nodiscard]] size_t count_header(std::string_view name) const {
+        std::string lower_name;
+        lower_name.reserve(name.size());
+        for (char c : name) {
+            lower_name.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        size_t count = 0;
+        for (const auto& [k, v] : all_headers) {
+            if (k == lower_name) {
+                ++count;
+            }
+        }
+        return count;
     }
 };
 
@@ -129,6 +148,7 @@ SimpleHttpResponse send_http_get(
                 value.pop_back();
             }
             result.headers[key] = value;
+            result.all_headers.emplace_back(key, value);
         }
     }
 
@@ -252,4 +272,184 @@ TEST_F(HttpIntegrationTest, ConcurrentRequestsDoNotCrashServer) {
     for (auto& f : futures) {
         EXPECT_TRUE(f.get());
     }
+}
+
+TEST_F(HttpIntegrationTest, SystemEndpointReturns200AndValidSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    EXPECT_FALSE(resp.get_header("x-request-id").empty());
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    EXPECT_TRUE(json_body.is_object());
+
+    ASSERT_TRUE(json_body.contains("hostname"));
+    EXPECT_TRUE(json_body["hostname"].is_string());
+    EXPECT_FALSE(json_body["hostname"].get<std::string>().empty());
+
+    ASSERT_TRUE(json_body.contains("os_name"));
+    EXPECT_TRUE(json_body["os_name"].is_string());
+    EXPECT_FALSE(json_body["os_name"].get<std::string>().empty());
+
+    ASSERT_TRUE(json_body.contains("os_version"));
+    EXPECT_TRUE(json_body["os_version"].is_string());
+
+    ASSERT_TRUE(json_body.contains("kernel_version"));
+    EXPECT_TRUE(json_body["kernel_version"].is_string());
+    EXPECT_FALSE(json_body["kernel_version"].get<std::string>().empty());
+
+    ASSERT_TRUE(json_body.contains("architecture"));
+    EXPECT_TRUE(json_body["architecture"].is_string());
+    EXPECT_FALSE(json_body["architecture"].get<std::string>().empty());
+
+    ASSERT_TRUE(json_body.contains("boot_time_utc"));
+    EXPECT_TRUE(json_body["boot_time_utc"].is_number_unsigned());
+    EXPECT_GT(json_body["boot_time_utc"].get<uint64_t>(), 0ULL);
+
+    ASSERT_TRUE(json_body.contains("uptime_seconds"));
+    EXPECT_TRUE(json_body["uptime_seconds"].is_number());
+    EXPECT_GE(json_body["uptime_seconds"].get<double>(), 0.0);
+}
+
+TEST_F(HttpIntegrationTest, RejectsInvalidRequestIdHeaderAndGeneratesSafeUuid) {
+    const std::string invalid_id = "malicious;id<script>";
+    std::unordered_map<std::string, std::string> headers = {{"X-Request-ID", invalid_id}};
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/system", headers);
+    EXPECT_EQ(resp.status_code, 200);
+
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    std::string returned_id = resp.get_header("x-request-id");
+    EXPECT_NE(returned_id, invalid_id);
+    EXPECT_EQ(returned_id.find(';'), std::string::npos);
+    EXPECT_EQ(returned_id.find('<'), std::string::npos);
+    EXPECT_EQ(returned_id.find('>'), std::string::npos);
+    EXPECT_FALSE(returned_id.empty());
+
+    // Test overly long request ID (> 64 chars)
+    const std::string long_id(100, 'a');
+    headers = {{"X-Request-ID", long_id}};
+    resp = send_http_get(kTestHost, kTestPort, "/api/v1/system", headers);
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    returned_id = resp.get_header("x-request-id");
+    EXPECT_NE(returned_id, long_id);
+    EXPECT_LE(returned_id.length(), 64U);
+    EXPECT_FALSE(returned_id.empty());
+}
+
+TEST_F(HttpIntegrationTest, SystemEndpointHandlesCollectorFailureGracefully) {
+    auto failing_collector = std::make_shared<nodepulse::collectors::SystemCollector>(
+        "/etc/os-release", "/nonexistent/proc/uptime", "/proc/stat");
+    auto failing_service = std::make_shared<nodepulse::services::SystemService>(failing_collector);
+    nodepulse::controllers::SystemController::set_system_service(failing_service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp.status_code, 500);
+
+    EXPECT_TRUE(resp.has_header("content-type"));
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_FALSE(json_body["error"]["message"].get<std::string>().empty());
+    EXPECT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_EQ(json_body["error"]["details"].size(), 1U);
+    EXPECT_EQ(json_body["error"]["details"][0]["collector"], "system_collector");
+
+    nodepulse::controllers::SystemController::set_system_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ConcurrentSystemAndHealthRequests) {
+    constexpr int kNumThreads = 8;
+    constexpr int kRequestsPerThread = 5;
+
+    std::vector<std::future<bool>> futures;
+    for (int t = 0; t < kNumThreads; ++t) {
+        futures.push_back(std::async(std::launch::async, [t]() {
+            for (int r = 0; r < kRequestsPerThread; ++r) {
+                std::string path = (t % 2 == 0) ? "/api/v1/system" : "/api/v1/health";
+                auto resp = send_http_get(kTestHost, kTestPort, path);
+                if (resp.status_code != 200) {
+                    return false;
+                }
+                auto j = nlohmann::json::parse(resp.body);
+                if (path == "/api/v1/system") {
+                    if (!j.contains("hostname") || !j.contains("uptime_seconds")) {
+                        return false;
+                    }
+                } else {
+                    if (j["status"] != "healthy") {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }));
+    }
+
+    for (auto& f : futures) {
+        EXPECT_TRUE(f.get());
+    }
+}
+
+TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
+    // 1. Health endpoint (HTTP 200)
+    auto resp_health = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp_health.status_code, 200);
+    EXPECT_EQ(resp_health.count_header("content-type"), 1U);
+    EXPECT_NE(resp_health.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 2. System endpoint (HTTP 200)
+    auto resp_system = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp_system.status_code, 200);
+    EXPECT_EQ(resp_system.count_header("content-type"), 1U);
+    EXPECT_NE(resp_system.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 3. Error response (HTTP 404)
+    auto resp_404 = send_http_get(kTestHost, kTestPort, "/api/v1/non_existent_route");
+    EXPECT_EQ(resp_404.status_code, 404);
+    EXPECT_EQ(resp_404.count_header("content-type"), 1U);
+    EXPECT_NE(resp_404.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 4. Collector failure error response (HTTP 500)
+    auto failing_collector = std::make_shared<nodepulse::collectors::SystemCollector>(
+        "/etc/os-release", "/nonexistent/proc/uptime", "/proc/stat");
+    auto failing_service = std::make_shared<nodepulse::services::SystemService>(failing_collector);
+    nodepulse::controllers::SystemController::set_system_service(failing_service);
+
+    auto resp_500 = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp_500.status_code, 500);
+    EXPECT_EQ(resp_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_500.get_header("content-type").find("application/json"), std::string::npos);
+
+    nodepulse::controllers::SystemController::set_system_service(nullptr);
+}
+
+TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {
+    // 0.0.0.0 wildcard binding
+    nodepulse::config::Config cfg_wildcard;
+    cfg_wildcard.server.host = "0.0.0.0";
+    nodepulse::server::Server server_wildcard(cfg_wildcard);
+    EXPECT_THROW(server_wildcard.setup(), std::runtime_error);
+    EXPECT_THROW(server_wildcard.run(), std::runtime_error);
+
+    // LAN / Private IP binding
+    nodepulse::config::Config cfg_lan;
+    cfg_lan.server.host = "192.168.1.100";
+    nodepulse::server::Server server_lan(cfg_lan);
+    EXPECT_THROW(server_lan.setup(), std::runtime_error);
+    EXPECT_THROW(server_lan.run(), std::runtime_error);
+
+    // Public IP binding
+    nodepulse::config::Config cfg_public;
+    cfg_public.server.host = "198.51.100.1";
+    nodepulse::server::Server server_public(cfg_public);
+    EXPECT_THROW(server_public.setup(), std::runtime_error);
+    EXPECT_THROW(server_public.run(), std::runtime_error);
 }

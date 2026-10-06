@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
 
         nodepulse::utils::Logger::init(config.server.log_level, config.server.log_format == "json");
         auto logger = nodepulse::utils::Logger::get();
-        logger->info("NodePulse server starting (Phase 2 - HTTP Foundation)");
+        logger->info("NodePulse server starting (v0.1.0)");
 
         nodepulse::server::Server server(std::move(config));
         server.setup();

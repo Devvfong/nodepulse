@@ -41,7 +41,6 @@ drogon::HttpResponsePtr make_error_response(drogon::HttpStatusCode status_code,
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setStatusCode(status_code);
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-    resp->addHeader("Content-Type", "application/json");
     resp->setBody(json_body.dump());
 
     if (!request_id.empty()) {

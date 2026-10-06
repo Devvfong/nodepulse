@@ -1,6 +1,9 @@
 add_library(nodepulse_lib STATIC
     config/config.cpp
+    collectors/system_collector.cpp
     controllers/health_controller.cpp
+    controllers/system_controller.cpp
+    services/system_service.cpp
     server/server.cpp
     utils/error_response.cpp
     utils/logger.cpp
