@@ -3,12 +3,12 @@
 ## Project Metadata
 - **Project**: NodePulse
 - **Description**: Lightweight Linux server monitoring and management agent written in C++20 using Drogon
-- **Status**: Process & Service Collector implemented, hardened, and verified with native `/proc/<pid>` parsing (stat with comm parentheses/space handling, status, sanitized cmdline), systemd D-Bus inspection via dynamic `sd-bus` runtime loading, async worker thread pool offloading (DEC-013), background delta process CPU sampling, query filtering and limit validation, and standard Drogon endpoint integration
-- **Current Implementation Phase**: Phase 8 — Process & Service Collector
-- **Next Approved Phase**: Phase 9 — Authentication (`X-API-Key` middleware & validation)
+- **Status**: API Key Authentication implemented and verified with Drogon `AuthFilter` and AOP post-routing advice interception, timing-safe constant-time string comparison (`nodepulse::utils::constant_time_equals`), exemption for `/api/v1/health` (BR-001), mandatory enforcement across all 9 protected routes, secret loading via config file and `NODEPULSE_API_KEY` with strict zero-logging and empty-key startup rejection, and standard 401 `UNAUTHORIZED` error envelope emission
+- **Current Implementation Phase**: Phase 9 — Authentication (`X-API-Key` middleware & validation)
+- **Next Approved Phase**: Phase 10 — Rate Limiting (Token-bucket / Leaky-bucket middleware)
 - **Production Ready**: No
 - **Active Git Branch**: `master`
-- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, error responses, unit & integration tests)
+- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, error responses, unit & integration tests)
 
 ---
 
@@ -25,8 +25,8 @@
 | **Phase 6** | Disk Collector (`/proc/mounts`, `statvfs`) | **COMPLETED** | N/A |
 | **Phase 7** | Network Collector (`/proc/net/dev`, `/sys/class/net`) | **COMPLETED** | N/A |
 | **Phase 8** | Process & Service Collector (`/proc/<pid>`, systemd service inspection) | **COMPLETED** | N/A |
-| **Phase 9** | Authentication (`X-API-Key` middleware & validation) | PENDING | **YES (Next Approved)** |
-| **Phase 10** | Rate Limiting (Token-bucket / Leaky-bucket middleware) | PENDING | NO |
+| **Phase 9** | Authentication (`X-API-Key` middleware & validation) | **COMPLETED** | N/A |
+| **Phase 10** | Rate Limiting (Token-bucket / Leaky-bucket middleware) | PENDING | **YES (Next Approved)** |
 | **Phase 11** | Docker Integration (`/var/run/docker.sock` client) | PENDING | NO |
 | **Phase 12** | SSE Live Metrics (`/api/v1/events` streaming channel) | PENDING | NO |
 | **Phase 13** | Prometheus Exposition (`/metrics` scrape endpoint) | PENDING | NO |
@@ -59,6 +59,8 @@
   - `include/nodepulse/domain/network_info.hpp`: Domain model struct for network interface metrics (`NetworkInterfaceMetrics`) with cumulative counters and delta bandwidth rates (`rx_bytes_per_sec`, `tx_bytes_per_sec`)
   - `include/nodepulse/domain/process_info.hpp`: Domain model structs for process metrics (`ProcessInfo`, `ProcessDetail`)
   - `include/nodepulse/domain/service_info.hpp`: Domain model structs for systemd service metrics (`ServiceInfo`, `ServiceDetail`)
+  - `include/nodepulse/utils/security.hpp` & `src/utils/security.cpp`: Timing side-channel resistant string comparison utility `nodepulse::utils::constant_time_equals` evaluating differences in bounded execution time proportional only to the expected secret length
+  - `include/nodepulse/middleware/auth_filter.hpp` & `src/middleware/auth_filter.cpp`: Drogon `HttpFilter` and AOP post-routing advice interceptor enforcing `X-API-Key` authentication with health probe exemption and structured 401 error envelope responses
   - `include/nodepulse/collectors/system_collector.hpp` & `src/collectors/system_collector.cpp`: Collector parsing `/proc/uptime`, `/proc/stat` (`btime`), `/etc/os-release`, and invoking `gethostname()` / `uname()`
   - `include/nodepulse/collectors/cpu_collector.hpp` & `src/collectors/cpu_collector.cpp`: Collector parsing `/proc/stat`, `/proc/loadavg`, and `/proc/cpuinfo`
   - `include/nodepulse/collectors/memory_collector.hpp` & `src/collectors/memory_collector.cpp`: Collector parsing `/proc/meminfo` with kibibytes-to-bytes conversion, `MemAvailable` fallback, zero-swap safeguards, and integer overflow checks
@@ -84,8 +86,8 @@
   - `include/nodepulse/utils/error_response.hpp` & `src/utils/error_response.cpp`: Standard JSON error envelope generator and error code taxonomy
   - `include/nodepulse/utils/logger.hpp` & `src/utils/logger.cpp`: Logger abstraction wrapping spdlog with custom and structured JSON patterns
   - `include/nodepulse/controllers/health_controller.hpp` & `src/controllers/health_controller.cpp`: Drogon controller for `GET /api/v1/health`
-  - `include/nodepulse/server/server.hpp` & `src/server/server.cpp`: Drogon server lifecycle manager, loopback-only network binding enforcement, validated Request ID injector, access logger, background CPU, Network, and Process sampling lifecycle orchestration, and centralized 404/exception handlers
-  - `apps/server/main.cpp`: Application entry point with CLI parsing (`--config`, `--validate-config`, `--version`, `--help`)
+  - `include/nodepulse/server/server.hpp` & `src/server/server.cpp`: Drogon server lifecycle manager, loopback-only network binding enforcement, empty API key startup rejection, validated Request ID injector, access logger, post-routing auth advice registration, background CPU, Network, and Process sampling lifecycle orchestration, and centralized 404/exception handlers
+  - `apps/server/main.cpp`: Application entry point with CLI parsing (`--config`, `--validate-config`, `--version`, `--help`) and empty API key startup validation
 - **Test Fixtures**:
   - `tests/fixtures/proc/uptime`: Sample `/proc/uptime`
   - `tests/fixtures/proc/stat`: Sample `/proc/stat` containing `btime` line
@@ -120,6 +122,8 @@
   - `tests/unit/smoke_test.cpp`: Test harness and basic JSON serialization tests (3 tests)
   - `tests/unit/config_test.cpp`: Config defaults, JSON parsing, validation constraints, and env override tests (10 tests)
   - `tests/unit/error_response_test.cpp`: Standard error JSON structure, timestamping, and HTTP response content type tests (3 tests)
+  - `tests/unit/security_test.cpp`: Timing side-channel resistant string comparison tests covering exact matches, single-byte variances at prefix/middle/suffix, length mismatches (shorter/longer), empty inputs, oversized payloads, case sensitivity, and binary content with null bytes (11 tests)
+  - `tests/unit/auth_filter_test.cpp`: Path exemption rule checks, null request handling, unconfigured key rejection, valid key validation (including case insensitivity), invalid and empty key rejection, and mock request interception with 401 error envelope generation (9 tests)
   - `tests/unit/system_collector_test.cpp`: Stream parsers, fallback behaviors, and fixture-driven system collector and service tests (21 tests)
   - `tests/unit/cpu_collector_test.cpp`: Stream parsers, warming up baseline handling (DEC-014), delta calculations, wrap/reset recovery, zero elapsed time caching, hotplug core count detection, steal time accounting, background sampling thread validation, and missing file error handling (21 tests)
   - `tests/unit/memory_collector_test.cpp`: Stream parser verification, exact byte conversions, zero swap resilience, MemAvailable fallback, malformed input rejection, integer overflow prevention, arithmetic underflow prevention, fixture files, live host sanity, and service delegation tests (20 tests)
@@ -127,44 +131,46 @@
   - `tests/unit/network_collector_test.cpp`: Stream parser validation, whitespace variance, malformed/non-numeric row rejection, uint64 maximum boundary, sysfs enrichment (`address`, `operstate`, `speed`), fallback on missing sysfs files, rate delta calculations, warming up baseline handling, counter wrap recovery, hotplug and interface removal handling, background sampling thread lifecycle, and live Linux host sanity tests (16 tests)
   - `tests/unit/process_collector_test.cpp`: Stat line stream parser (including complex names with spaces and nested parentheses), status stream parser (`Uid`, `VmRSS`, `VmSize`, `Threads`), cmdline sanitization and truncation, PID validation (`pid >= 1`, upper bound `/proc/sys/kernel/pid_max`), process sorting (`cpu`, `memory`, `pid`), limit truncation, and fixture-driven collector tests (8 tests)
   - `tests/unit/service_collector_test.cpp`: Unit name validation regex (`^[a-zA-Z0-9_\-\.\@]+$`), unit name normalization (auto `.service` append), mock D-Bus listing by state (`active`, `inactive`, `failed`, `all`), mock service detail query, and error handling (5 tests)
-  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe, system endpoint contract, cpu endpoint contract, memory endpoint contract, disks endpoint contract, network endpoint contract, processes endpoint contract (`sort`, `limit`, 400 validation), process detail endpoint contract (`pid >= 1`, 400 validation, 404 not found), services endpoint contract (`state`, `limit`, 400 validation, 500 failure), service detail endpoint contract (regex validation, 400, 404, 500), concurrency across all 8 endpoints (24 concurrent threads), single Content-Type emission regression across all endpoints and error paths, and loopback binding security enforcement (27 integration tests)
+  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe exemption, authenticated access across all 9 protected routes, missing API key rejection (401), invalid API key rejection (401), empty and oversized key header rejection (401), case-insensitive header lookup (`x-api-key`), unknown route 404 preservation (including routes resembling /health), concurrent authenticated and unauthenticated queries, and server startup empty key rejection (36 integration tests)
 
 ---
 
-## Phase 8 Verification and Gate Status
+## Phase 9 Verification and Gate Status
 - **Exit Gate Criteria**:
-  - [x] Stream parser implemented for `/proc/<pid>/stat` safely extracting comm between first `(` and last `)`, properly handling processes with spaces and nested parentheses in process names.
-  - [x] Stream parser implemented for `/proc/<pid>/status` safely extracting `Uid`, `VmRSS`, `VmSize`, and `Threads`.
-  - [x] Cmdline sanitizer implemented converting null bytes to spaces and truncating at 4096 bytes, with fallback to `comm` for kernel threads.
-  - [x] Native Linux interfaces utilized directly (`/proc/<pid>`, `/proc/sys/kernel/pid_max`, `/run/dbus/system_bus_socket`); zero shell commands (`ps`, `top`, `pgrep`, `awk`, `grep`, `systemctl`, `journalctl`).
-  - [x] Systemd D-Bus communication implemented via dynamic runtime resolution (`dlopen`/`dlsym`) of `libsystemd.so.0`, providing zero-dependency compilation and graceful fallback when systemd is unavailable.
-  - [x] Process and service requests offloaded asynchronously to `trantor::ConcurrentTaskQueue` (DEC-013), eliminating blocking I/O on Drogon's reactive event loop.
-  - [x] Dedicated background sampling thread implemented for `ProcessService` (1000ms interval) calculating per-process delta CPU utilization without request stalls.
-  - [x] Query parameters `sort` (`cpu`, `memory`, `pid`) and `limit` (`1..200`) validated with standard 400 `INVALID_REQUEST` responses on invalid inputs.
-  - [x] Single process lookup (`GET /api/v1/processes/{pid}`) strictly validates positive integer (`pid >= 1`) against `/proc/sys/kernel/pid_max`, returning 400 on invalid, 404 `RESOURCE_NOT_FOUND` when not found, and 200 with all 13 documented fields.
-  - [x] Single service lookup (`GET /api/v1/services/{name}`) validates name against `^[a-zA-Z0-9_\-\.\@]+$`, auto-appends `.service` suffix, returns 400 on invalid format, 404 on `NoSuchUnit`, and 500 on D-Bus communication failure.
-  - [x] Single `Content-Type: application/json; charset=utf-8` header emission verified on all process and service endpoints (both success and error responses).
-  - [x] 100% test pass rate across unit and integration test suites (151/151 passed).
-  - [x] Zero warnings or errors under `-Wall -Wextra -Wpedantic -Werror`.
+  - [x] Timing side-channel resistant string comparison utility implemented (`nodepulse::utils::constant_time_equals`) with volatile accumulator, exact-length iteration proportional only to reference secret, safely handling varying lengths, empty strings, and oversized inputs without allocation or division by zero.
+  - [x] Drogon `AuthFilter` implemented inheriting from `drogon::HttpFilter<AuthFilter>` and centrally wired into `registerPostRoutingAdvice`.
+  - [x] Health probe `GET /api/v1/health` strictly exempt from authentication per BR-001.
+  - [x] All 9 protected routes (`/system`, `/cpu`, `/memory`, `/disks`, `/network`, `/processes`, `/processes/{pid}`, `/services`, `/services/{name}`) strictly reject unauthenticated requests with HTTP 401 `UNAUTHORIZED`.
+  - [x] Rejection of invalid, empty, and oversized `X-API-Key` headers with HTTP 401 `UNAUTHORIZED`.
+  - [x] Case-insensitive header support (`X-API-Key` and `x-api-key`).
+  - [x] Unknown routes return HTTP 404 `RESOURCE_NOT_FOUND` rather than 401 when accessed without credentials.
+  - [x] Zero secret exposure: API keys never logged, never emitted in JSON error payloads, never printed during config validation, and never committed to source or state documents (BR-002).
+  - [x] Server rejects startup on empty or missing API key (`std::runtime_error` in `Server::setup()` and exit code 1 in CLI).
+  - [x] Exactly one `Content-Type: application/json; charset=utf-8` header emitted on all 401 responses.
+  - [x] Standard `X-Request-ID` header emitted and preserved across authentication failures.
+  - [x] 100% test pass rate across unit and integration test suites (184/184 passed).
+  - [x] Zero compiler warnings or errors under `-Wall -Wextra -Wpedantic -Werror`.
   - [x] `format-check` passes with zero violations.
-  - [x] `tidy` passes with zero errors and zero warnings across all 27 source files.
-  - [x] Live HTTP smoke test verified with `curl` for all 4 new endpoints (`/api/v1/processes`, `/api/v1/processes/{pid}`, `/api/v1/services`, `/api/v1/services/{name}`) alongside prior endpoints, 400 validation, and 404 not found handling.
+  - [x] `tidy` passes with zero warnings or errors across all 29 source files.
+  - [x] Live HTTP smoke test verified with `curl` for empty key startup rejection, 200 health probe without key, 401 rejection on unauthenticated operational queries, 200 success with valid key, and 404 on nonexistent endpoints.
 - **Verification Commands Executed**:
   ```bash
   cmake --build build -- -j
   ctest --test-dir build --output-on-failure
   cmake --build build --target format-check
   cmake --build build --target tidy
-  ./build/apps/server/nodepulse_server -c config/nodepulse_smoke.json &
-  curl -s -i "http://127.0.0.1:8089/api/v1/processes?sort=cpu&limit=2"
-  curl -s -i "http://127.0.0.1:8089/api/v1/processes/$PID"
-  curl -s -i "http://127.0.0.1:8089/api/v1/services?state=active&limit=2"
-  curl -s -i "http://127.0.0.1:8089/api/v1/services/cron.service"
+  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_smoke_empty_key.json # Rejects startup with exit code 1
+  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_smoke_auth.json &
+  curl -s -i "http://127.0.0.1:18099/api/v1/health" # Returns 200 OK without auth
+  curl -s -i "http://127.0.0.1:18099/api/v1/system" # Returns 401 Unauthorized
+  curl -s -i -H "X-API-Key: wrong" "http://127.0.0.1:18099/api/v1/system" # Returns 401 Unauthorized
+  curl -s -i -H "X-API-Key: <valid>" "http://127.0.0.1:18099/api/v1/system" # Returns 200 OK
+  curl -s -i "http://127.0.0.1:18099/api/v1/non_existent_route" # Returns 404 Not Found
   ```
 - **Verification Results**:
   - Build: Succeeded cleanly (all targets built under `-Wall -Wextra -Wpedantic -Werror`).
-  - Tests: 151/151 passed (100% pass rate).
+  - Tests: 184/184 passed (100% pass rate).
   - Format check: Succeeded (0 violations).
-  - Static analysis: Succeeded (0 errors, 0 warnings across all 27 source files).
-  - Live HTTP smoke test: Verified single `content-type` emission, HTTP 200 OK with process array and service array, 400 invalid parameter handling, 404 resource not found handling, and graceful server shutdown.
-- **Confirmation**: Phase 9 (Authentication) has NOT been started.
+  - Static analysis: Succeeded (0 errors, 0 warnings across all 29 source files).
+  - Live HTTP smoke test: Verified single `content-type` emission, HTTP 200 on `/health` without credentials, HTTP 401 `UNAUTHORIZED` on unauthenticated queries, HTTP 200 on authenticated operational queries, HTTP 404 `RESOURCE_NOT_FOUND` on unknown endpoints, empty key startup rejection, and graceful server shutdown.
+- **Confirmation**: Phase 10 (Rate Limiting) has NOT been started.

@@ -15,6 +15,8 @@ add_executable(tests_unit
     unit/network_collector_test.cpp
     unit/process_collector_test.cpp
     unit/service_collector_test.cpp
+    unit/security_test.cpp
+    unit/auth_filter_test.cpp
 )
 
 target_link_libraries(tests_unit

@@ -13,6 +13,7 @@
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
+#include <nodepulse/middleware/auth_filter.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -47,10 +48,16 @@ Server::~Server() {
 void Server::setup() {
     if (config_.server.host != "127.0.0.1" && config_.server.host != "::1" &&
         config_.server.host != "localhost") {
-        throw std::runtime_error(
-            "Binding to non-loopback address ('" + config_.server.host +
-            "') is rejected: authentication is not implemented prior to Phase 9.");
+        throw std::runtime_error("Binding to non-loopback address ('" + config_.server.host +
+                                 "') is rejected: plain HTTP loopback-only binding is enforced.");
     }
+
+    if (config_.security.api_key.empty()) {
+        throw std::runtime_error(
+            "Server startup rejected: security.api_key cannot be empty. "
+            "Set it in config or via NODEPULSE_API_KEY environment variable.");
+    }
+    middleware::AuthFilter::set_api_key(config_.security.api_key);
 
     start_time_ = std::chrono::steady_clock::now();
     controllers::HealthController::set_start_time(start_time_);
@@ -93,6 +100,12 @@ void Server::setup() {
         req->getAttributes()->insert("request_id", req_id);
         req->getAttributes()->insert("start_time", std::chrono::steady_clock::now());
         accb();
+    });
+
+    drogon::app().registerPostRoutingAdvice([](const drogon::HttpRequestPtr& req,
+                                               drogon::AdviceCallback&& acb,
+                                               drogon::AdviceChainCallback&& accb) {
+        middleware::AuthFilter::handle_request(req, std::move(acb), std::move(accb));
     });
 
     drogon::app().registerPostHandlingAdvice([](const drogon::HttpRequestPtr& req,
@@ -166,9 +179,13 @@ void Server::setup() {
 void Server::run() {
     if (config_.server.host != "127.0.0.1" && config_.server.host != "::1" &&
         config_.server.host != "localhost") {
+        throw std::runtime_error("Binding to non-loopback address ('" + config_.server.host +
+                                 "') is rejected: plain HTTP loopback-only binding is enforced.");
+    }
+    if (config_.security.api_key.empty()) {
         throw std::runtime_error(
-            "Binding to non-loopback address ('" + config_.server.host +
-            "') is rejected: authentication is not implemented prior to Phase 9.");
+            "Server startup rejected: security.api_key cannot be empty. "
+            "Set it in config or via NODEPULSE_API_KEY environment variable.");
     }
     utils::Logger::get()->info("Starting NodePulse HTTP server on {}:{} with {} threads",
                                config_.server.host, config_.server.port, config_.server.threads);

@@ -68,6 +68,13 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        if (config.security.api_key.empty()) {
+            std::cerr << "Server startup rejected: security.api_key cannot be empty. "
+                      << "Provide a key via configuration file or NODEPULSE_API_KEY environment "
+                         "variable.\n";
+            return 1;
+        }
+
         nodepulse::utils::Logger::init(config.server.log_level, config.server.log_format == "json");
         auto logger = nodepulse::utils::Logger::get();
         logger->info("NodePulse server starting (v0.1.0)");

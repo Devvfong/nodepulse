@@ -23,8 +23,10 @@ add_library(nodepulse_lib STATIC
     services/service_manager_service.cpp
     services/system_service.cpp
     server/server.cpp
+    middleware/auth_filter.cpp
     utils/error_response.cpp
     utils/logger.cpp
+    utils/security.cpp
 )
 
 target_include_directories(nodepulse_lib
