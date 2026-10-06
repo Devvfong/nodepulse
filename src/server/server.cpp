@@ -14,6 +14,7 @@
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
 #include <nodepulse/middleware/auth_filter.hpp>
+#include <nodepulse/middleware/rate_limit_filter.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -58,6 +59,7 @@ void Server::setup() {
             "Set it in config or via NODEPULSE_API_KEY environment variable.");
     }
     middleware::AuthFilter::set_api_key(config_.security.api_key);
+    middleware::RateLimitFilter::init(config_.rate_limiting);
 
     start_time_ = std::chrono::steady_clock::now();
     controllers::HealthController::set_start_time(start_time_);
@@ -105,7 +107,11 @@ void Server::setup() {
     drogon::app().registerPostRoutingAdvice([](const drogon::HttpRequestPtr& req,
                                                drogon::AdviceCallback&& acb,
                                                drogon::AdviceChainCallback&& accb) {
-        middleware::AuthFilter::handle_request(req, std::move(acb), std::move(accb));
+        middleware::AuthFilter::handle_request(
+            req, std::move(acb), [req, acb_cb = acb, accb_cb = std::move(accb)]() mutable {
+                middleware::RateLimitFilter::handle_request(req, std::move(acb_cb),
+                                                            std::move(accb_cb));
+            });
     });
 
     drogon::app().registerPostHandlingAdvice([](const drogon::HttpRequestPtr& req,
@@ -197,6 +203,7 @@ void Server::stop() {
     controllers::CpuController::get_cpu_service()->stop_sampling();
     controllers::NetworkController::get_network_service()->stop_sampling();
     controllers::ProcessController::get_process_service()->stop_sampling();
+    middleware::RateLimitFilter::reset();
     drogon::app().quit();
 }
 

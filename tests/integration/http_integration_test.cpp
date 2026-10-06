@@ -27,6 +27,7 @@
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
+#include <nodepulse/middleware/rate_limit_filter.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
@@ -199,6 +200,9 @@ class HttpIntegrationTest : public ::testing::Test {
         cfg.server.port = kTestPort;
         cfg.server.threads = 2;
         cfg.security.api_key = kValidApiKey;
+        cfg.rate_limiting.enabled = true;
+        cfg.rate_limiting.burst_capacity = 500;
+        cfg.rate_limiting.requests_per_minute = 60000;
 
         server_ = std::make_unique<nodepulse::server::Server>(cfg);
         server_->setup();
@@ -227,6 +231,15 @@ class HttpIntegrationTest : public ::testing::Test {
         }
         server_thread_.reset();
         server_.reset();
+    }
+
+    void TearDown() override {
+        nodepulse::config::RateLimitConfig default_cfg;
+        default_cfg.enabled = true;
+        default_cfg.burst_capacity = 500;
+        default_cfg.requests_per_minute = 60000;
+        nodepulse::middleware::RateLimitFilter::init(default_cfg);
+        nodepulse::middleware::RateLimitFilter::set_enabled(true);
     }
 };
 
@@ -1475,6 +1488,138 @@ TEST_F(HttpIntegrationTest, ConcurrentAuthenticatedAndUnauthenticatedRequests) {
 
     for (auto& f : futures) {
         EXPECT_TRUE(f.get());
+    }
+}
+
+TEST_F(HttpIntegrationTest, RateLimitRequestsBelowLimitSucceed) {
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 5;
+    rl_cfg.requests_per_minute = 60;
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg);
+
+    for (int i = 0; i < 5; ++i) {
+        auto resp = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+        EXPECT_EQ(resp.status_code, 200) << "Request " << i << " failed unexpectedly";
+    }
+}
+
+TEST_F(HttpIntegrationTest, RateLimitExceededReturns429WithRetryAfterAndStandardEnvelope) {
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 2;
+    rl_cfg.requests_per_minute = 60;
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg);
+
+    // 2 requests within burst capacity succeed
+    auto resp1 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp1.status_code, 200);
+
+    auto resp2 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp2.status_code, 200);
+
+    // 3rd request exceeds burst capacity -> 429 RATE_LIMITED
+    std::unordered_map<std::string, std::string> custom_hdr = {
+        {"X-API-Key", kValidApiKey}, {"X-Request-ID", "rl-test-req-id-12345"}};
+    auto resp3 = send_http_get(kTestHost, kTestPort, "/api/v1/system", custom_hdr);
+
+    EXPECT_EQ(resp3.status_code, 429);
+    EXPECT_EQ(resp3.count_header("content-type"), 1U);
+    EXPECT_NE(resp3.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp3.has_header("retry-after"));
+    EXPECT_FALSE(resp3.get_header("retry-after").empty());
+    EXPECT_TRUE(resp3.has_header("x-request-id"));
+    EXPECT_EQ(resp3.get_header("x-request-id"), "rl-test-req-id-12345");
+
+    auto json_body = nlohmann::json::parse(resp3.body);
+    ASSERT_TRUE(json_body.contains("error"));
+    EXPECT_EQ(json_body["error"]["code"], "RATE_LIMITED");
+    EXPECT_EQ(json_body["error"]["message"], "Too many requests. Please slow down.");
+    EXPECT_FALSE(json_body["error"]["timestamp"].get<std::string>().empty());
+    ASSERT_TRUE(json_body["error"]["details"].is_array());
+    ASSERT_FALSE(json_body["error"]["details"].empty());
+    EXPECT_TRUE(json_body["error"]["details"][0].contains("retry_after_seconds"));
+    EXPECT_GE(json_body["error"]["details"][0]["retry_after_seconds"].get<uint64_t>(), 1U);
+}
+
+TEST_F(HttpIntegrationTest, RateLimitHealthEndpointFollowsPolicy) {
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 2;
+    rl_cfg.requests_per_minute = 60;
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg);
+
+    // Health probe does not require authentication
+    auto resp1 = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp1.status_code, 200);
+
+    auto resp2 = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp2.status_code, 200);
+
+    // Exceeding burst capacity triggers 429 RATE_LIMITED on /health
+    auto resp3 = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp3.status_code, 429);
+    EXPECT_TRUE(resp3.has_header("retry-after"));
+    auto json_body = nlohmann::json::parse(resp3.body);
+    EXPECT_EQ(json_body["error"]["code"], "RATE_LIMITED");
+}
+
+TEST_F(HttpIntegrationTest, RateLimitAuthEvaluatedBeforeRateLimiter) {
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 1;
+    rl_cfg.requests_per_minute = 60;
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg);
+
+    // 1 valid request consumes token
+    auto resp1 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp1.status_code, 200);
+
+    // Limiter tokens for this client are now exhausted (0 tokens remaining)
+    // Next request with INVALID key must still return 401 UNAUTHORIZED, not 429
+    std::unordered_map<std::string, std::string> invalid_header = {{"X-API-Key", "bad_secret"}};
+    auto resp_invalid = send_http_get(kTestHost, kTestPort, "/api/v1/system", invalid_header);
+    EXPECT_EQ(resp_invalid.status_code, 401);
+    auto json_invalid = nlohmann::json::parse(resp_invalid.body);
+    EXPECT_EQ(json_invalid["error"]["code"], "UNAUTHORIZED");
+
+    // Request with MISSING key on protected endpoint must return 401 UNAUTHORIZED, not 429
+    auto resp_missing = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp_missing.status_code, 401);
+    auto json_missing = nlohmann::json::parse(resp_missing.body);
+    EXPECT_EQ(json_missing["error"]["code"], "UNAUTHORIZED");
+}
+
+TEST_F(HttpIntegrationTest, RateLimitFilterRecoversAfterSimulatedTimeAdvance) {
+    auto sim_now = std::chrono::steady_clock::now();
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 1;
+    rl_cfg.requests_per_minute = 60;  // 1 token/sec
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg, [&sim_now]() { return sim_now; });
+
+    // 1st request succeeds
+    auto resp1 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp1.status_code, 200);
+
+    // 2nd request rate-limited
+    auto resp2 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp2.status_code, 429);
+
+    // Advance simulated clock by 1 second (refilling 1 token)
+    sim_now += std::chrono::seconds(1);
+
+    // 3rd request must now succeed
+    auto resp3 = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp3.status_code, 200);
+}
+
+TEST_F(HttpIntegrationTest, RateLimitDisabledPassesAllBursts) {
+    nodepulse::middleware::RateLimitFilter::set_enabled(false);
+
+    for (int i = 0; i < 10; ++i) {
+        auto resp = send_auth_get(kTestHost, kTestPort, "/api/v1/system");
+        EXPECT_EQ(resp.status_code, 200) << "Request " << i << " failed with disabled rate limit";
     }
 }
 

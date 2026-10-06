@@ -24,6 +24,7 @@ add_library(nodepulse_lib STATIC
     services/system_service.cpp
     server/server.cpp
     middleware/auth_filter.cpp
+    middleware/rate_limit_filter.cpp
     utils/error_response.cpp
     utils/logger.cpp
     utils/security.cpp

@@ -3,12 +3,12 @@
 ## Project Metadata
 - **Project**: NodePulse
 - **Description**: Lightweight Linux server monitoring and management agent written in C++20 using Drogon
-- **Status**: API Key Authentication implemented and verified with Drogon `AuthFilter` and AOP post-routing advice interception, timing-safe constant-time string comparison (`nodepulse::utils::constant_time_equals`), exemption for `/api/v1/health` (BR-001), mandatory enforcement across all 9 protected routes, secret loading via config file and `NODEPULSE_API_KEY` with strict zero-logging and empty-key startup rejection, and standard 401 `UNAUTHORIZED` error envelope emission
-- **Current Implementation Phase**: Phase 9 — Authentication (`X-API-Key` middleware & validation)
-- **Next Approved Phase**: Phase 10 — Rate Limiting (Token-bucket / Leaky-bucket middleware)
+- **Status**: Rate Limiting implemented and verified with in-memory token-bucket limiter (`nodepulse::middleware::RateLimiter`), Drogon `RateLimitFilter`, AOP post-routing advice pipeline integration (Auth -> Rate Limiting), per-client IP address tracking (`req->peerAddr().toIp()`), deterministic idle state eviction and bounded memory cap (10,000 max entries), Retry-After header calculation, standard 429 `RATE_LIMITED` envelope, and full health route rate-limiting policy enforcement
+- **Current Implementation Phase**: Phase 10 — Rate Limiting (Token-bucket middleware & HTTP 429 enforcement)
+- **Next Approved Phase**: Phase 11 — Docker Integration (`/var/run/docker.sock` client)
 - **Production Ready**: No
 - **Active Git Branch**: `master`
-- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, error responses, unit & integration tests)
+- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, rate limit filter & token-bucket limiter, error responses, unit & integration tests)
 
 ---
 
@@ -26,8 +26,8 @@
 | **Phase 7** | Network Collector (`/proc/net/dev`, `/sys/class/net`) | **COMPLETED** | N/A |
 | **Phase 8** | Process & Service Collector (`/proc/<pid>`, systemd service inspection) | **COMPLETED** | N/A |
 | **Phase 9** | Authentication (`X-API-Key` middleware & validation) | **COMPLETED** | N/A |
-| **Phase 10** | Rate Limiting (Token-bucket / Leaky-bucket middleware) | PENDING | **YES (Next Approved)** |
-| **Phase 11** | Docker Integration (`/var/run/docker.sock` client) | PENDING | NO |
+| **Phase 10** | Rate Limiting (Token-bucket / Leaky-bucket middleware) | **COMPLETED** | N/A |
+| **Phase 11** | Docker Integration (`/var/run/docker.sock` client) | PENDING | **YES (Next Approved)** |
 | **Phase 12** | SSE Live Metrics (`/api/v1/events` streaming channel) | PENDING | NO |
 | **Phase 13** | Prometheus Exposition (`/metrics` scrape endpoint) | PENDING | NO |
 | **Phase 14** | PostgreSQL Metric History (libpqxx repository & storage) | PENDING | NO |
@@ -61,6 +61,7 @@
   - `include/nodepulse/domain/service_info.hpp`: Domain model structs for systemd service metrics (`ServiceInfo`, `ServiceDetail`)
   - `include/nodepulse/utils/security.hpp` & `src/utils/security.cpp`: Timing side-channel resistant string comparison utility `nodepulse::utils::constant_time_equals` evaluating differences in bounded execution time proportional only to the expected secret length
   - `include/nodepulse/middleware/auth_filter.hpp` & `src/middleware/auth_filter.cpp`: Drogon `HttpFilter` and AOP post-routing advice interceptor enforcing `X-API-Key` authentication with health probe exemption and structured 401 error envelope responses
+  - `include/nodepulse/middleware/rate_limit_filter.hpp` & `src/middleware/rate_limit_filter.cpp`: Thread-safe in-memory token-bucket rate limiter (`RateLimiter`) and Drogon `RateLimitFilter` tracking client IP addresses (`req->peerAddr().toIp()`), with deterministic stale entry cleanup, bounded in-memory state (10,000 max entries), `Retry-After` header generation, and standard 429 `RATE_LIMITED` JSON error responses
   - `include/nodepulse/collectors/system_collector.hpp` & `src/collectors/system_collector.cpp`: Collector parsing `/proc/uptime`, `/proc/stat` (`btime`), `/etc/os-release`, and invoking `gethostname()` / `uname()`
   - `include/nodepulse/collectors/cpu_collector.hpp` & `src/collectors/cpu_collector.cpp`: Collector parsing `/proc/stat`, `/proc/loadavg`, and `/proc/cpuinfo`
   - `include/nodepulse/collectors/memory_collector.hpp` & `src/collectors/memory_collector.cpp`: Collector parsing `/proc/meminfo` with kibibytes-to-bytes conversion, `MemAvailable` fallback, zero-swap safeguards, and integer overflow checks
@@ -131,46 +132,48 @@
   - `tests/unit/network_collector_test.cpp`: Stream parser validation, whitespace variance, malformed/non-numeric row rejection, uint64 maximum boundary, sysfs enrichment (`address`, `operstate`, `speed`), fallback on missing sysfs files, rate delta calculations, warming up baseline handling, counter wrap recovery, hotplug and interface removal handling, background sampling thread lifecycle, and live Linux host sanity tests (16 tests)
   - `tests/unit/process_collector_test.cpp`: Stat line stream parser (including complex names with spaces and nested parentheses), status stream parser (`Uid`, `VmRSS`, `VmSize`, `Threads`), cmdline sanitization and truncation, PID validation (`pid >= 1`, upper bound `/proc/sys/kernel/pid_max`), process sorting (`cpu`, `memory`, `pid`), limit truncation, and fixture-driven collector tests (8 tests)
   - `tests/unit/service_collector_test.cpp`: Unit name validation regex (`^[a-zA-Z0-9_\-\.\@]+$`), unit name normalization (auto `.service` append), mock D-Bus listing by state (`active`, `inactive`, `failed`, `all`), mock service detail query, and error handling (5 tests)
-  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe exemption, authenticated access across all 9 protected routes, missing API key rejection (401), invalid API key rejection (401), empty and oversized key header rejection (401), case-insensitive header lookup (`x-api-key`), unknown route 404 preservation (including routes resembling /health), concurrent authenticated and unauthenticated queries, and server startup empty key rejection (36 integration tests)
+  - `tests/unit/rate_limit_filter_test.cpp`: Requests below limit, exact boundary behavior, immediate 429 rejection on burst exhaustion, window recovery, full refill capacity restoration, independent client IP isolation, stale entry cleanup, reset clearing, concurrent thread safety (16 threads), disabled filter pass-through, HTTP 429 envelope format, and simulated clock time advance recovery (12 tests)
+  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe exemption, authenticated access across all 9 protected routes, missing API key rejection (401), invalid API key rejection (401), empty and oversized key header rejection (401), case-insensitive header lookup (`x-api-key`), unknown route 404 preservation (including routes resembling /health), concurrent authenticated and unauthenticated queries, server startup empty key rejection, rate limit requests below limit, burst exhaustion returning HTTP 429 with `Retry-After` and standard JSON envelope, health endpoint rate-limiting policy compliance, auth evaluation prior to rate limiting, simulated time recovery, and disabled rate limiting pass-through (42 integration tests)
 
 ---
 
-## Phase 9 Verification and Gate Status
+## Phase 10 Verification and Gate Status
 - **Exit Gate Criteria**:
-  - [x] Timing side-channel resistant string comparison utility implemented (`nodepulse::utils::constant_time_equals`) with volatile accumulator, exact-length iteration proportional only to reference secret, safely handling varying lengths, empty strings, and oversized inputs without allocation or division by zero.
-  - [x] Drogon `AuthFilter` implemented inheriting from `drogon::HttpFilter<AuthFilter>` and centrally wired into `registerPostRoutingAdvice`.
-  - [x] Health probe `GET /api/v1/health` strictly exempt from authentication per BR-001.
-  - [x] All 9 protected routes (`/system`, `/cpu`, `/memory`, `/disks`, `/network`, `/processes`, `/processes/{pid}`, `/services`, `/services/{name}`) strictly reject unauthenticated requests with HTTP 401 `UNAUTHORIZED`.
-  - [x] Rejection of invalid, empty, and oversized `X-API-Key` headers with HTTP 401 `UNAUTHORIZED`.
-  - [x] Case-insensitive header support (`X-API-Key` and `x-api-key`).
-  - [x] Unknown routes return HTTP 404 `RESOURCE_NOT_FOUND` rather than 401 when accessed without credentials.
-  - [x] Zero secret exposure: API keys never logged, never emitted in JSON error payloads, never printed during config validation, and never committed to source or state documents (BR-002).
-  - [x] Server rejects startup on empty or missing API key (`std::runtime_error` in `Server::setup()` and exit code 1 in CLI).
-  - [x] Exactly one `Content-Type: application/json; charset=utf-8` header emitted on all 401 responses.
-  - [x] Standard `X-Request-ID` header emitted and preserved across authentication failures.
-  - [x] 100% test pass rate across unit and integration test suites (184/184 passed).
+  - [x] Thread-safe in-memory token-bucket rate limiter implemented (`nodepulse::middleware::RateLimiter`) with configurable requests-per-minute and burst capacity.
+  - [x] Rate limiting middleware implemented (`nodepulse::middleware::RateLimitFilter`) inheriting from `drogon::HttpFilter<RateLimitFilter>` and centrally chained in Drogon AOP post-routing advice pipeline.
+  - [x] Middleware ordering strictly enforced: Authentication is evaluated prior to rate limiting (`DATA_FLOW.md`); unauthenticated or invalid API key requests fail with 401 `UNAUTHORIZED` without consuming rate limit quota.
+  - [x] Client identity strictly grounded in client IP address (`req->peerAddr().toIp()`) without trusting untrusted `X-Forwarded-For` headers.
+  - [x] Loopback-only network binding restriction (`127.0.0.1`, `::1`, `localhost`) strictly preserved.
+  - [x] Bounded in-memory state with strict 10,000 maximum entries cap and deterministic stale entry cleanup based on elapsed refill duration.
+  - [x] Injectable / mockable clock function supported (`RateLimiter::ClockFunc`) enabling 100% deterministic, non-flaky sub-millisecond testing without sleeps.
+  - [x] Health probe `GET /api/v1/health` subjected to rate limiting per documented policy without unauthorized exemption.
+  - [x] HTTP 429 `RATE_LIMITED` emitted on burst exhaustion with standard JSON error envelope (`error.code: "RATE_LIMITED"`, non-empty timestamp, `X-Request-ID`, `details[0].retry_after_seconds`).
+  - [x] Response headers on 429: exactly one `Content-Type: application/json; charset=utf-8`, standard `X-Request-ID`, and `Retry-After: <seconds>` indicating backoff duration.
+  - [x] Zero secret exposure: API keys and internal limiter state are never logged, never emitted in JSON error payloads, and never printed.
+  - [x] 100% test pass rate across unit and integration test suites (202/202 passed).
   - [x] Zero compiler warnings or errors under `-Wall -Wextra -Wpedantic -Werror`.
   - [x] `format-check` passes with zero violations.
-  - [x] `tidy` passes with zero warnings or errors across all 29 source files.
-  - [x] Live HTTP smoke test verified with `curl` for empty key startup rejection, 200 health probe without key, 401 rejection on unauthenticated operational queries, 200 success with valid key, and 404 on nonexistent endpoints.
+  - [x] `tidy` passes with zero warnings or errors across all 30 source files.
+  - [x] Live HTTP smoke test verified with `curl` for requests below limit (200), burst exhaustion (429), `Retry-After: 1` header, standard error envelope, token replenishment recovery, health endpoint rate limiting, and auth-before-rate-limit 401 priority.
 - **Verification Commands Executed**:
   ```bash
   cmake --build build -- -j
   ctest --test-dir build --output-on-failure
   cmake --build build --target format-check
   cmake --build build --target tidy
-  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_smoke_empty_key.json # Rejects startup with exit code 1
-  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_smoke_auth.json &
-  curl -s -i "http://127.0.0.1:18099/api/v1/health" # Returns 200 OK without auth
-  curl -s -i "http://127.0.0.1:18099/api/v1/system" # Returns 401 Unauthorized
-  curl -s -i -H "X-API-Key: wrong" "http://127.0.0.1:18099/api/v1/system" # Returns 401 Unauthorized
+  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_smoke_ratelimit.json &
   curl -s -i -H "X-API-Key: <valid>" "http://127.0.0.1:18099/api/v1/system" # Returns 200 OK
-  curl -s -i "http://127.0.0.1:18099/api/v1/non_existent_route" # Returns 404 Not Found
+  # Burst exhaustion:
+  curl -s -i -H "X-API-Key: <valid>" "http://127.0.0.1:18099/api/v1/system" # Returns 429 Too Many Requests (Retry-After: 1)
+  # Auth priority:
+  curl -s -i -H "X-API-Key: wrong" "http://127.0.0.1:18099/api/v1/system" # Returns 401 Unauthorized
+  # Health rate limiting:
+  curl -s -i "http://127.0.0.1:18099/api/v1/health" # Returns 429 Too Many Requests
   ```
 - **Verification Results**:
   - Build: Succeeded cleanly (all targets built under `-Wall -Wextra -Wpedantic -Werror`).
-  - Tests: 184/184 passed (100% pass rate).
+  - Tests: 202/202 passed (100% pass rate).
   - Format check: Succeeded (0 violations).
-  - Static analysis: Succeeded (0 errors, 0 warnings across all 29 source files).
-  - Live HTTP smoke test: Verified single `content-type` emission, HTTP 200 on `/health` without credentials, HTTP 401 `UNAUTHORIZED` on unauthenticated queries, HTTP 200 on authenticated operational queries, HTTP 404 `RESOURCE_NOT_FOUND` on unknown endpoints, empty key startup rejection, and graceful server shutdown.
-- **Confirmation**: Phase 10 (Rate Limiting) has NOT been started.
+  - Static analysis: Succeeded (0 errors, 0 warnings across all 30 source files).
+  - Live HTTP smoke test: Verified burst handling, HTTP 429 status, `Retry-After` header, standard error envelope, token replenishment, and auth evaluation priority.
+- **Confirmation**: Phase 11 (Docker Integration) has NOT been started.

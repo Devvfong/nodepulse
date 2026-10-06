@@ -17,6 +17,7 @@ add_executable(tests_unit
     unit/service_collector_test.cpp
     unit/security_test.cpp
     unit/auth_filter_test.cpp
+    unit/rate_limit_filter_test.cpp
 )
 
 target_link_libraries(tests_unit
