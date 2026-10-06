@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.compiler.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - name: GCC
+            cc: gcc-14
+            cxx: g++-14
+          - name: Clang
+            cc: clang-18
+            cxx: clang++-18
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            libdrogon-dev \
+            libtrantor-dev \
+            libjsoncpp-dev \
+            libspdlog-dev \
+            libfmt-dev \
+            nlohmann-json3-dev \
+            libgtest-dev \
+            uuid-dev \
+            zlib1g-dev \
+            ${{ matrix.compiler.cc }} \
+            ${{ matrix.compiler.cxx }}
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }} \
+            -DWARNINGS_AS_ERRORS=ON \
+            -DBUILD_TESTING=ON
+
+      - name: Compile project
+        run: cmake --build build
+
+      - name: Execute tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Verify server binary linkage and startup
+        run: ./build/apps/server/nodepulse_server --version
+
+  code-quality:
+    name: Code Quality (Format & Clang-Tidy)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies and linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            libdrogon-dev \
+            libtrantor-dev \
+            libjsoncpp-dev \
+            libspdlog-dev \
+            libfmt-dev \
+            nlohmann-json3-dev \
+            libgtest-dev \
+            uuid-dev \
+            zlib1g-dev \
+            clang-format-18 \
+            clang-tidy-18
+
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-18 100
+
+      - name: Configure CMake with compile commands
+        run: |
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Format verification
+        run: cmake --build build --target format-check
+
+      - name: Clang-Tidy static analysis
+        run: cmake --build build --target tidy
+

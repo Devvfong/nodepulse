@@ -1,0 +1,53 @@
+# Build artifacts
+build/
+build-*/
+cmake-build-*/
+bin/
+lib/
+out/
+dist/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Compiler and sanitizer artifacts
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.d
+*.gcda
+*.gcno
+*.gcov
+coverage.info
+coverage_html/
+asan.log*
+tsan.log*
+ubsan.log*
+
+# Core dumps and logs
+core
+core.*
+*.log
+
+# Editor and IDE metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# User-specific configurations
+config/config.json
+!config/config.example.json
+

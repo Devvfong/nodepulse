@@ -3,12 +3,12 @@
 ## Project Metadata
 - **Project**: NodePulse
 - **Description**: Lightweight Linux server monitoring and management agent written in C++20 using Drogon
-- **Status**: Documentation and architecture definition
-- **Current Implementation Phase**: Phase 0 — Documentation & Architecture Specification
-- **Next Approved Phase**: Phase 1 — Repository Foundation
+- **Status**: Repository foundation implemented and verified
+- **Current Implementation Phase**: Phase 1 — Repository Foundation
+- **Next Approved Phase**: Phase 2 — HTTP Foundation
 - **Production Ready**: No
 - **Active Git Branch**: `master`
-- **Current Implementation Exists**: No (0 source files, 0 header files, 0 build files)
+- **Current Implementation Exists**: Yes (build system, logger utility, minimal server entry point, smoke tests)
 
 ---
 
@@ -17,8 +17,8 @@
 | Phase | Description | Status | Approved to Start |
 |---|---|---|---|
 | **Phase 0** | Documentation & Architectural Specification | **COMPLETED** | N/A |
-| **Phase 1** | Repository Foundation (CMake, Clang-Tooling, GTest) | PENDING | **YES (Next Approved)** |
-| **Phase 2** | HTTP Foundation (Drogon setup, Health Check, JSON handling) | PENDING | NO |
+| **Phase 1** | Repository Foundation (CMake, Clang-Tooling, GTest) | **COMPLETED** | N/A |
+| **Phase 2** | HTTP Foundation (Drogon setup, Health Check, JSON handling) | PENDING | **YES (Next Approved)** |
 | **Phase 3** | System Collector (`/proc/uptime`, `/etc/os-release`, uname) | PENDING | NO |
 | **Phase 4** | CPU Collector (`/proc/stat`, `/proc/loadavg`, `/proc/cpuinfo`) | PENDING | NO |
 | **Phase 5** | Memory Collector (`/proc/meminfo`, virtual memory & swap) | PENDING | NO |
@@ -37,22 +37,56 @@
 ---
 
 ## Current Artifact Inventory
-- **Source Code**: None (`src/` and `apps/` directories exist but contain 0 files).
-- **Public Headers**: None (`include/nodepulse/` directories exist but contain 0 files).
-- **Tests**: None (`tests/` directory tree exists but contains 0 files).
-- **Build Scripts**: None (`CMakeLists.txt` not yet created).
-- **Documentation**: Authoritative baseline specifications established in `docs/` and root documentation files.
+- **Build Configuration**:
+  - `CMakeLists.txt`: Root target-based CMake configuration (C++20, `-Wall -Wextra -Wpedantic -Werror`, quality targets)
+  - `src/CMakeLists.txt`: Static library `nodepulse_lib` definition
+  - `apps/CMakeLists.txt`: Applications directory definition
+  - `apps/server/CMakeLists.txt`: `nodepulse_server` executable target definition
+  - `tests/CMakeLists.txt`: `tests_unit` executable with GoogleTest discovery
+- **Quality Tooling**:
+  - `.gitignore`: Ignore build artifacts, IDE configs, coverage, logs
+  - `.clang-format`: Formatter rules conforming to project coding standards
+  - `.clang-tidy`: Static analysis rules with warnings-as-errors
+  - Targets: `format-check`, `format-fix`, `tidy`
+- **Continuous Integration**:
+  - `.github/workflows/ci.yml`: Matrix build testing GCC and Clang, unit tests, formatting, and clang-tidy
+- **Source Code**:
+  - `include/nodepulse/utils/logger.hpp`: Logger abstraction wrapping spdlog
+  - `src/utils/logger.cpp`: Logger implementation supporting standard and JSON formatting
+  - `apps/server/main.cpp`: Minimal entry point verifying linkage of Drogon, spdlog, and nlohmann/json
+- **Tests**:
+  - `tests/unit/smoke_test.cpp`: GoogleTest test suite verifying test harness, logging, and JSON parsing
+- **Documentation**:
+  - Complete Phase 0 documentation suite in `docs/` and root specification files
 
 ---
 
-## Verification and Gate Status
-- **Phase 0 Exit Gate Criteria**:
-  - [x] All 37 documentation files populated with complete specifications.
-  - [x] Requirement IDs (`FR-xxx`, `NFR-xxx`), Business Rules (`BR-xxx`), and Use Cases (`UC-xxx`) indexed.
-  - [x] Architectural layers, error codes, and REST endpoints explicitly detailed.
-  - [x] Agent execution guidelines formalized in [AGENTS.md](file:///home/devqii/workspace/nodepulse/AGENTS.md).
-  - [x] No C++ source or build files prematurely committed.
-- **Phase 1 Prerequisites**:
-  - Read [IMPLEMENTATION_PLAN.md](file:///home/devqii/workspace/nodepulse/IMPLEMENTATION_PLAN.md#phase-1--repository-foundation) and [BUILD.md](file:///home/devqii/workspace/nodepulse/docs/engineering/BUILD.md).
-  - Ensure GCC 11+ or Clang 14+, CMake 3.22+, and Ninja are available.
-
+## Phase 1 Verification and Gate Status
+- **Exit Gate Criteria**:
+  - [x] Modern target-based CMake configuration requiring C++20.
+  - [x] Zero compiler warnings under `-Wall -Wextra -Wpedantic -Werror`.
+  - [x] Out-of-source build support (`build/` directory).
+  - [x] GoogleTest integration operational; minimal smoke tests pass 100%.
+  - [x] `clang-format` checking target (`format-check`) passes clean.
+  - [x] `clang-tidy` static analysis target (`tidy`) passes clean with zero errors.
+  - [x] GitHub Actions CI workflow authored and configured for GCC & Clang.
+  - [x] Minimal application entry point verifies library linkage without implementing HTTP/collector logic.
+- **Verification Commands Executed**:
+  ```bash
+  cmake -B build -S .
+  cmake --build build
+  ctest --test-dir build --output-on-failure
+  cmake --build build --target format-check
+  cmake --build build --target tidy
+  ./build/apps/server/nodepulse_server --version
+  ```
+- **Verification Results**:
+  - Build: Succeeded cleanly (all targets built).
+  - Tests: 3/3 passed (100% pass rate).
+  - Format check: Succeeded (0 violations).
+  - Static analysis: Succeeded (0 errors).
+  - Server executable: Ran successfully and printed version string.
+- **Known Issues & Environment Decisions**:
+  - The repository contains zero machine-specific paths or hardcoded linker RPATH flags (`-Wl,--disable-new-dtags` removed). In non-root development environments with libraries installed in custom user prefixes, standard CMake `CMAKE_PREFIX_PATH` and linker `LIBRARY_PATH` / `LD_LIBRARY_PATH` environment variables are utilized during invocation.
+  - In `.clang-tidy`, `-misc-include-cleaner` is disabled to allow standard C++ library usage of umbrella headers (`<spdlog/spdlog.h>`, `<nlohmann/json.hpp>`, `<drogon/drogon.h>`). Clang-Tidy 18 is standardized matching CI.
+- **Confirmation**: Phase 2 (HTTP Foundation / REST controllers) has NOT been started.

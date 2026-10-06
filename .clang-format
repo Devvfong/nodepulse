@@ -1,0 +1,46 @@
+---
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20
+
+# Indentation and column limits
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -2
+
+# Braces and spacing
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+SpaceBeforeParens: ControlStatements
+SpaceBeforeAssignmentOperators: true
+SpaceAfterCStyleCast: false
+SpacesInAngles: false
+
+# Pointer and reference alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Header includes hygiene
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<[a-z0-9_]+>'
+    Priority: 1
+  - Regex: '^<(drogon|trantor|spdlog|nlohmann|gtest)/'
+    Priority: 2
+  - Regex: '^<nodepulse/'
+    Priority: 3
+  - Regex: '.*'
+    Priority: 4
+
+# Modern C++ formatting
+FixNamespaceComments: true
+CompactNamespaces: false
+Cpp11BracedListStyle: true
+...
+
