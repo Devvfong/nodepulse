@@ -212,6 +212,9 @@ This document defines the complete API contracts for NodePulse under the initial
     }
   ]
   ```
+- **Measurement & Semantic Notes**:
+  - `cpu_percent`: Per-process CPU utilization calculated via differential jiffies (`utime + stime`) divided by clock ticks and elapsed monotonic time (`std::chrono::steady_clock`). In accordance with standard Linux semantics (`top` IRIX mode), 100.0% represents saturation of one logical CPU core; multithreaded processes may report utilization exceeding 100.0% up to `100.0 * logical_cores`.
+  - **PID Reuse Protection**: Background sampling pairs each PID with its boot-relative `starttime` tick. When a PID is recycled by the kernel, `starttime` changes, prompting the agent to discard stale metrics and reset the baseline to avoid false spikes.
 
 ---
 

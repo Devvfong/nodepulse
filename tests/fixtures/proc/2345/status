@@ -1,0 +1,10 @@
+Name:	proc (with) spa
+State:	R (running)
+Tgid:	2345
+Pid:	2345
+PPid:	1
+Uid:	0	0	0	0
+VmSize:	   78125 kB
+VmRSS:	    8000 kB
+Threads:	4
+

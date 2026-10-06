@@ -21,6 +21,7 @@ This document establishes the binding domain invariants and operational business
 | **BR-011** | Strict Parameter Validation | Input Validation | Controller Request Handlers |
 | **BR-012** | Metric Timestamp Synchronization | Accuracy | Domain Serializers / Collectors |
 | **BR-013** | CPU Utilization Sampling State Contract | Accuracy & Truthfulness | CpuService / Controller |
+| **BR-014** | Process CPU Semantics & PID Reuse Protection | Accuracy & Safety | ProcessService / ProcessCollector |
 
 ---
 
@@ -78,5 +79,12 @@ This document establishes the binding domain invariants and operational business
 ### BR-013: CPU Utilization Sampling & Measurement State Contract
 - **Statement**: CPU utilization cannot be derived from a single `/proc/stat` sample. On initial sample, counter reset, or core count changes, `usage_percent` MUST NOT report a false zero; it MUST report `null` with `measurement_status: "warming_up"`. Once an interval has elapsed between two valid snapshots, `usage_percent` MUST report the computed percentage with `measurement_status: "ready"`. On rapid queries where zero total jiffies have elapsed between samples, the agent MUST return the previously computed measurement explicitly marked with `measurement_status: "cached"`, documenting that it is a previous measurement and not a fresh calculation.
 - **Enforcement**: Enforced in `CpuService` and validated via `GET /api/v1/cpu` responses.
+
+### BR-014: Process CPU Accounting Semantics & PID Reuse Protection
+- **Statement**: 
+  1. **Core-Capacity Accounting (IRIX Mode)**: Per-process `cpu_percent` measures the cumulative CPU time scheduled in user and system mode across all threads of the process relative to elapsed monotonic wall-clock time (`std::chrono::steady_clock`). In accordance with standard Linux semantics (`top` IRIX mode), 100.0% denotes saturation of 1 logical CPU core. For multithreaded processes, `cpu_percent` is unnormalized by host core count and may legally report values up to `100.0 * logical_cores`.
+  2. **PID Reuse Protection**: Differential CPU sampling MUST identify processes using the tuple `(pid, starttime)` where `starttime` is the boot-relative clock tick from `/proc/<pid>/stat`. When a PID is reused by a newly spawned process, `starttime` changes. The collector and service MUST detect this discrepancy, discard stale baselines from terminated processes, and re-establish a fresh baseline with `cpu_percent = 0.0`.
+- **Enforcement**: Handled in `ProcessService::sample_locked()` and `ProcessCollector::collect_process_detail()`.
+
 
 

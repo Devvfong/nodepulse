@@ -121,6 +121,31 @@ AmbientCapabilities=
 
 To eliminate directory traversal, command injection, and resource exhaustion:
 1. **Process IDs (`{pid}`)**: Validated strictly as positive decimal integers (`pid >= 1`). If a runtime upper-bound check is performed, Linux `/proc/sys/kernel/pid_max` is authoritative; NodePulse does not enforce a hard-coded maximum invariant. Requests with non-positive, floating-point, or non-numeric PIDs fail immediately with HTTP 400 `INVALID_REQUEST`.
-2. **Service Names (`{name}`)**: Validated against regex `^[a-zA-Z0-9_\-\.\@]+$` to prevent directory traversal outside systemd unit names.
+2. **Service Names (`{name}`)**: Validated against regex `^[a-zA-Z0-9_\-\.\@]+$` to prevent directory traversal outside systemd unit names. Maximum length bounded to 256 characters (aligned with systemd `UNIT_NAME_MAX`).
 3. **Query Limits (`limit`)**: Bounded to a maximum of 200 items to prevent unbounded heap allocations.
+
+---
+
+## 7. Process Telemetry & Sensitive Data Exposure
+
+Under the approved Phase 8 contract, NodePulse exposes process command line arguments (`cmdline`) and working directory paths (`working_directory`):
+
+### 7.1 Security Implications & Inherent Risks
+Command lines can inadvertently contain sensitive information, including:
+- Passwords and database credentials passed via flags (e.g. `--password=...`, `-psecret`)
+- API keys, OAuth tokens, and secret bearer tokens
+- Internal database connection URIs (`postgres://user:pass@host/db`)
+- Private file and directory paths
+
+Because the approved API contract mandates exposing command lines without redaction, **access to `/api/v1/processes` is a privileged operation**. Exposing `/api/v1/processes` to untrusted networks creates credential exposure risks.
+
+### 7.2 Implemented Security Controls & Hard Safety Boundaries
+To mitigate risks without violating the API schema:
+1. **Bounded Buffer Reads**: The agent strictly bounds `/proc/<pid>/cmdline` reads to a maximum of 4096 bytes (`kMaxCmdlineLength`), preventing denial of service via excessively long command-line attacks.
+2. **NUL Byte Normalization**: NUL-delimited argument streams (`argv` arrays) are safely converted to single space-separated strings.
+3. **Control Character Stripping**: ASCII control characters (< 32 or > 126) are stripped and replaced with spaces, preventing terminal escape injection, log forging, or malformed JSON payloads.
+4. **Zero Environment Exposure**: NodePulse **NEVER** opens, reads, or exposes `/proc/<pid>/environ`. Process environment variables often hold critical secrets and remain strictly uninspected.
+5. **Fail-Closed Permission Handling**: When encountering processes owned by other users with restricted access, or when processes terminate during enumeration, the collector fails closed gracefully (returning fallback comm or omitting unavailable entries) without raising global 500 errors or crashing.
+6. **Network Binding Isolation**: NodePulse enforces loopback-only binding (`127.0.0.1`) by default prior to Phase 9. In Phase 9 and beyond, access is guarded by constant-time `X-API-Key` authentication.
+
 

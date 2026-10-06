@@ -4,17 +4,23 @@ add_library(nodepulse_lib STATIC
     collectors/disk_collector.cpp
     collectors/memory_collector.cpp
     collectors/network_collector.cpp
+    collectors/process_collector.cpp
+    collectors/service_collector.cpp
     collectors/system_collector.cpp
     controllers/cpu_controller.cpp
     controllers/disk_controller.cpp
     controllers/health_controller.cpp
     controllers/memory_controller.cpp
     controllers/network_controller.cpp
+    controllers/process_controller.cpp
+    controllers/service_controller.cpp
     controllers/system_controller.cpp
     services/cpu_service.cpp
     services/disk_service.cpp
     services/memory_service.cpp
     services/network_service.cpp
+    services/process_service.cpp
+    services/service_manager_service.cpp
     services/system_service.cpp
     server/server.cpp
     utils/error_response.cpp
@@ -32,6 +38,7 @@ target_link_libraries(nodepulse_lib
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Drogon::Drogon
+        ${CMAKE_DL_LIBS}
 )
 
 target_compile_features(nodepulse_lib PUBLIC cxx_std_20)

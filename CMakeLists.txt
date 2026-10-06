@@ -11,6 +11,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_BUILD_RPATH
+    /home/devqii/.local/lib/x86_64-linux-gnu
+    /home/devqii/.local/lib
+)
+set(CMAKE_INSTALL_RPATH
+    /home/devqii/.local/lib/x86_64-linux-gnu
+    /home/devqii/.local/lib
+)
 # Build Options
 option(BUILD_TESTING "Build test suites" ON)
 option(WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
@@ -43,6 +51,11 @@ find_package(Threads REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Drogon REQUIRED)
+
+link_directories(
+    $ENV{HOME}/.local/lib/x86_64-linux-gnu
+    $ENV{HOME}/.local/lib
+)
 
 # Clang-Tidy Integration during compilation
 if(ENABLE_CLANG_TIDY)

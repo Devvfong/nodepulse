@@ -1,0 +1,29 @@
+Name:	nodepulse_server
+Umask:	0022
+State:	S (sleeping)
+Tgid:	1248
+Ngid:	0
+Pid:	1248
+PPid:	1
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	64
+Groups:	1000
+VmPeak:	  154000 kB
+VmSize:	  150390 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	   34500 kB
+VmRSS:	   33691 kB
+RssAnon:	   12000 kB
+RssFile:	   21691 kB
+RssShmem:	       0 kB
+VmData:	   50000 kB
+VmStk:	     132 kB
+VmExe:	    2048 kB
+VmLib:	    8192 kB
+VmPTE:	      64 kB
+VmSwap:	       0 kB
+Threads:	8
+

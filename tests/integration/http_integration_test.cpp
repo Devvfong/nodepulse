@@ -16,18 +16,24 @@
 #include <nodepulse/collectors/disk_collector.hpp>
 #include <nodepulse/collectors/memory_collector.hpp>
 #include <nodepulse/collectors/network_collector.hpp>
+#include <nodepulse/collectors/process_collector.hpp>
+#include <nodepulse/collectors/service_collector.hpp>
 #include <nodepulse/collectors/system_collector.hpp>
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/controllers/cpu_controller.hpp>
 #include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/memory_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
+#include <nodepulse/controllers/process_controller.hpp>
+#include <nodepulse/controllers/service_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/network_service.hpp>
+#include <nodepulse/services/process_service.hpp>
+#include <nodepulse/services/service_manager_service.hpp>
 #include <nodepulse/services/system_service.hpp>
 #include <nodepulse/utils/logger.hpp>
 
@@ -749,8 +755,297 @@ TEST_F(HttpIntegrationTest, NetworkEndpointHandlesCollectorFailureGracefully) {
     nodepulse::controllers::NetworkController::set_network_service(nullptr);
 }
 
+TEST_F(HttpIntegrationTest, ProcessesEndpointReturnsExpectedSchema) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/processes");
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.is_array());
+    EXPECT_FALSE(json_body.empty());
+
+    for (const auto& proc : json_body) {
+        ASSERT_TRUE(proc.contains("pid"));
+        EXPECT_TRUE(proc["pid"].is_number_integer());
+        EXPECT_GE(proc["pid"].get<int32_t>(), 1);
+
+        ASSERT_TRUE(proc.contains("name"));
+        EXPECT_TRUE(proc["name"].is_string());
+
+        ASSERT_TRUE(proc.contains("user"));
+        EXPECT_TRUE(proc["user"].is_string());
+
+        ASSERT_TRUE(proc.contains("state"));
+        EXPECT_TRUE(proc["state"].is_string());
+
+        ASSERT_TRUE(proc.contains("cpu_percent"));
+        EXPECT_TRUE(proc["cpu_percent"].is_number());
+
+        ASSERT_TRUE(proc.contains("memory_rss_bytes"));
+        EXPECT_TRUE(proc["memory_rss_bytes"].is_number_unsigned());
+
+        ASSERT_TRUE(proc.contains("cmdline"));
+        EXPECT_TRUE(proc["cmdline"].is_string());
+    }
+}
+
+TEST_F(HttpIntegrationTest, ProcessesEndpointQueryParametersValidation) {
+    // Valid sorting and limiting
+    auto resp_sorted = send_http_get(kTestHost, kTestPort, "/api/v1/processes?sort=memory&limit=5");
+    EXPECT_EQ(resp_sorted.status_code, 200);
+    auto j_sorted = nlohmann::json::parse(resp_sorted.body);
+    ASSERT_TRUE(j_sorted.is_array());
+    EXPECT_LE(j_sorted.size(), 5U);
+    if (j_sorted.size() > 1) {
+        for (size_t i = 1; i < j_sorted.size(); ++i) {
+            EXPECT_GE(j_sorted[i - 1]["memory_rss_bytes"].get<uint64_t>(),
+                      j_sorted[i]["memory_rss_bytes"].get<uint64_t>());
+        }
+    }
+
+    // Invalid sort parameter (400)
+    auto resp_bad_sort = send_http_get(kTestHost, kTestPort, "/api/v1/processes?sort=unknown");
+    EXPECT_EQ(resp_bad_sort.status_code, 400);
+    auto j_bad_sort = nlohmann::json::parse(resp_bad_sort.body);
+    EXPECT_EQ(j_bad_sort["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_bad_sort["error"]["details"][0]["field"], "sort");
+
+    // Invalid limit parameter: out of range (400)
+    auto resp_bad_limit0 = send_http_get(kTestHost, kTestPort, "/api/v1/processes?limit=0");
+    EXPECT_EQ(resp_bad_limit0.status_code, 400);
+    auto j_bad_limit0 = nlohmann::json::parse(resp_bad_limit0.body);
+    EXPECT_EQ(j_bad_limit0["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_bad_limit0["error"]["details"][0]["field"], "limit");
+
+    auto resp_bad_limit250 = send_http_get(kTestHost, kTestPort, "/api/v1/processes?limit=250");
+    EXPECT_EQ(resp_bad_limit250.status_code, 400);
+
+    // Invalid limit parameter: non-numeric (400)
+    auto resp_bad_limit_str = send_http_get(kTestHost, kTestPort, "/api/v1/processes?limit=abc");
+    EXPECT_EQ(resp_bad_limit_str.status_code, 400);
+}
+
+TEST_F(HttpIntegrationTest, ProcessDetailEndpointReturnsExpectedSchema) {
+    pid_t my_pid = getpid();
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/processes/" + std::to_string(my_pid));
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["pid"].get<int32_t>(), static_cast<int32_t>(my_pid));
+    EXPECT_GE(j["ppid"].get<int32_t>(), 0);
+    EXPECT_FALSE(j["name"].get<std::string>().empty());
+    EXPECT_FALSE(j["user"].get<std::string>().empty());
+    EXPECT_FALSE(j["state"].get<std::string>().empty());
+    EXPECT_TRUE(j["cpu_percent"].is_number());
+    EXPECT_TRUE(j["memory_rss_bytes"].is_number_unsigned());
+    EXPECT_TRUE(j["memory_vms_bytes"].is_number_unsigned());
+    EXPECT_GE(j["thread_count"].get<uint32_t>(), 1U);
+    EXPECT_GE(j["open_fd_count"].get<uint32_t>(), 1U);
+    EXPECT_GT(j["start_time_epoch"].get<uint64_t>(), 0U);
+    EXPECT_TRUE(j["cmdline"].is_string());
+    EXPECT_FALSE(j["working_directory"].get<std::string>().empty());
+}
+
+TEST_F(HttpIntegrationTest, ProcessDetailEndpointErrorValidation) {
+    // Negative PID (400)
+    auto resp_neg = send_http_get(kTestHost, kTestPort, "/api/v1/processes/-5");
+    EXPECT_EQ(resp_neg.status_code, 400);
+    auto j_neg = nlohmann::json::parse(resp_neg.body);
+    EXPECT_EQ(j_neg["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_neg["error"]["details"][0]["field"], "pid");
+
+    // Zero PID (400)
+    auto resp_zero = send_http_get(kTestHost, kTestPort, "/api/v1/processes/0");
+    EXPECT_EQ(resp_zero.status_code, 400);
+
+    // Non-numeric PID (400)
+    auto resp_str = send_http_get(kTestHost, kTestPort, "/api/v1/processes/notanumber");
+    EXPECT_EQ(resp_str.status_code, 400);
+
+    // PID exceeding pid_max (400)
+    auto resp_overflow = send_http_get(kTestHost, kTestPort, "/api/v1/processes/99999999");
+    EXPECT_EQ(resp_overflow.status_code, 400);
+
+    // Non-existent PID within pid_max (404)
+    auto resp_404 = send_http_get(kTestHost, kTestPort, "/api/v1/processes/999999");
+    EXPECT_EQ(resp_404.status_code, 404);
+    auto j_404 = nlohmann::json::parse(resp_404.body);
+    EXPECT_EQ(j_404["error"]["code"], "RESOURCE_NOT_FOUND");
+    EXPECT_EQ(j_404["error"]["details"][0]["resource_type"], "process");
+    EXPECT_EQ(j_404["error"]["details"][0]["identifier"], "999999");
+}
+
+TEST_F(HttpIntegrationTest, ServicesEndpointReturnsExpectedSchema) {
+    auto collector = std::make_shared<nodepulse::collectors::ServiceCollector>();
+    collector->set_custom_providers(
+        [](const std::string& filter)
+            -> std::optional<std::vector<nodepulse::domain::ServiceInfo>> {
+            std::vector<nodepulse::domain::ServiceInfo> list = {
+                {"nodepulse.service", "NodePulse Host Monitoring Agent", "loaded", "active",
+                 "running", "enabled"},
+                {"ssh.service", "OpenSSH Server", "loaded", "active", "running", "enabled"},
+                {"cron.service", "Cron Daemon", "loaded", "inactive", "dead", "enabled"}};
+            if (filter == "all") {
+                return list;
+            }
+            std::vector<nodepulse::domain::ServiceInfo> filtered;
+            for (const auto& s : list) {
+                if (s.active_state == filter) {
+                    filtered.push_back(s);
+                }
+            }
+            return filtered;
+        },
+        nullptr);
+
+    auto service = std::make_shared<nodepulse::services::ServiceManagerService>(collector);
+    nodepulse::controllers::ServiceController::set_service_manager_service(service);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/services");
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+
+    auto json_body = nlohmann::json::parse(resp.body);
+    ASSERT_TRUE(json_body.is_array());
+    EXPECT_EQ(json_body.size(), 3U);
+    EXPECT_EQ(json_body[0]["name"], "nodepulse.service");
+    EXPECT_EQ(json_body[0]["load_state"], "loaded");
+    EXPECT_EQ(json_body[0]["active_state"], "active");
+    EXPECT_EQ(json_body[0]["sub_state"], "running");
+    EXPECT_EQ(json_body[0]["unit_file_state"], "enabled");
+
+    // Filter by state=active
+    auto resp_active = send_http_get(kTestHost, kTestPort, "/api/v1/services?state=active");
+    EXPECT_EQ(resp_active.status_code, 200);
+    auto j_active = nlohmann::json::parse(resp_active.body);
+    EXPECT_EQ(j_active.size(), 2U);
+
+    nodepulse::controllers::ServiceController::set_service_manager_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ServicesEndpointQueryParametersValidation) {
+    // Invalid state filter (400)
+    auto resp_bad_state = send_http_get(kTestHost, kTestPort, "/api/v1/services?state=broken");
+    EXPECT_EQ(resp_bad_state.status_code, 400);
+    auto j_bad_state = nlohmann::json::parse(resp_bad_state.body);
+    EXPECT_EQ(j_bad_state["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_bad_state["error"]["details"][0]["field"], "state");
+
+    // Invalid limit parameter (400)
+    auto resp_bad_limit = send_http_get(kTestHost, kTestPort, "/api/v1/services?limit=-1");
+    EXPECT_EQ(resp_bad_limit.status_code, 400);
+    auto j_bad_limit = nlohmann::json::parse(resp_bad_limit.body);
+    EXPECT_EQ(j_bad_limit["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_bad_limit["error"]["details"][0]["field"], "limit");
+
+    // Failure to communicate with D-Bus (500)
+    auto failing_collector = std::make_shared<nodepulse::collectors::ServiceCollector>();
+    failing_collector->set_custom_providers(
+        [](const std::string&) -> std::optional<std::vector<nodepulse::domain::ServiceInfo>> {
+            return std::nullopt;
+        },
+        nullptr);
+    auto failing_service =
+        std::make_shared<nodepulse::services::ServiceManagerService>(failing_collector);
+    nodepulse::controllers::ServiceController::set_service_manager_service(failing_service);
+
+    auto resp_500 = send_http_get(kTestHost, kTestPort, "/api/v1/services");
+    EXPECT_EQ(resp_500.status_code, 500);
+    auto j_500 = nlohmann::json::parse(resp_500.body);
+    EXPECT_EQ(j_500["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_EQ(j_500["error"]["details"][0]["collector"], "service_collector");
+
+    nodepulse::controllers::ServiceController::set_service_manager_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ServiceDetailEndpointReturnsExpectedSchema) {
+    auto collector = std::make_shared<nodepulse::collectors::ServiceCollector>();
+    collector->set_custom_providers(
+        nullptr, [](const std::string& name) -> nodepulse::collectors::ServiceDetailResult {
+            if (name == "nodepulse.service") {
+                nodepulse::domain::ServiceDetail d;
+                d.name = "nodepulse.service";
+                d.description = "NodePulse Linux Host Monitoring Agent";
+                d.load_state = "loaded";
+                d.active_state = "active";
+                d.sub_state = "running";
+                d.unit_file_state = "enabled";
+                d.main_pid = 1248;
+                d.restart_count = 0;
+                d.active_enter_timestamp_utc = 1728211200;
+                d.memory_current_bytes = 34500000;
+                return {nodepulse::collectors::ServiceStatusResult::kOk, d};
+            }
+            return {nodepulse::collectors::ServiceStatusResult::kNotFound, std::nullopt};
+        });
+
+    auto service = std::make_shared<nodepulse::services::ServiceManagerService>(collector);
+    nodepulse::controllers::ServiceController::set_service_manager_service(service);
+
+    // Exact name match
+    auto resp = send_http_get(kTestHost, kTestPort, "/api/v1/services/nodepulse.service");
+    EXPECT_EQ(resp.status_code, 200);
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["name"], "nodepulse.service");
+    EXPECT_EQ(j["main_pid"], 1248);
+    EXPECT_EQ(j["restart_count"], 0);
+    EXPECT_EQ(j["active_enter_timestamp_utc"], 1728211200ULL);
+    EXPECT_EQ(j["memory_current_bytes"], 34500000ULL);
+
+    // Auto-append .service extension
+    auto resp_short = send_http_get(kTestHost, kTestPort, "/api/v1/services/nodepulse");
+    EXPECT_EQ(resp_short.status_code, 200);
+    auto j_short = nlohmann::json::parse(resp_short.body);
+    EXPECT_EQ(j_short["name"], "nodepulse.service");
+
+    nodepulse::controllers::ServiceController::set_service_manager_service(nullptr);
+}
+
+TEST_F(HttpIntegrationTest, ServiceDetailEndpointErrorValidation) {
+    auto collector = std::make_shared<nodepulse::collectors::ServiceCollector>();
+    collector->set_custom_providers(
+        nullptr, [](const std::string& name) -> nodepulse::collectors::ServiceDetailResult {
+            if (name == "broken.service") {
+                return {nodepulse::collectors::ServiceStatusResult::kCollectorFailure,
+                        std::nullopt};
+            }
+            return {nodepulse::collectors::ServiceStatusResult::kNotFound, std::nullopt};
+        });
+
+    auto service = std::make_shared<nodepulse::services::ServiceManagerService>(collector);
+    nodepulse::controllers::ServiceController::set_service_manager_service(service);
+
+    // Invalid service name character (400)
+    auto resp_bad = send_http_get(kTestHost, kTestPort, "/api/v1/services/invalid;reboot");
+    EXPECT_EQ(resp_bad.status_code, 400);
+    auto j_bad = nlohmann::json::parse(resp_bad.body);
+    EXPECT_EQ(j_bad["error"]["code"], "INVALID_REQUEST");
+    EXPECT_EQ(j_bad["error"]["details"][0]["field"], "name");
+
+    // Service not found (404)
+    auto resp_404 = send_http_get(kTestHost, kTestPort, "/api/v1/services/nonexistent.service");
+    EXPECT_EQ(resp_404.status_code, 404);
+    auto j_404 = nlohmann::json::parse(resp_404.body);
+    EXPECT_EQ(j_404["error"]["code"], "RESOURCE_NOT_FOUND");
+    EXPECT_EQ(j_404["error"]["details"][0]["resource_type"], "service");
+    EXPECT_EQ(j_404["error"]["details"][0]["identifier"], "nonexistent.service");
+
+    // Collector failure (500)
+    auto resp_500 = send_http_get(kTestHost, kTestPort, "/api/v1/services/broken.service");
+    EXPECT_EQ(resp_500.status_code, 500);
+    auto j_500 = nlohmann::json::parse(resp_500.body);
+    EXPECT_EQ(j_500["error"]["code"], "COLLECTOR_FAILURE");
+    EXPECT_EQ(j_500["error"]["details"][0]["collector"], "service_collector");
+
+    nodepulse::controllers::ServiceController::set_service_manager_service(nullptr);
+}
+
 TEST_F(HttpIntegrationTest, ConcurrentAllEndpointsRequests) {
-    constexpr int kNumThreads = 18;
+    constexpr int kNumThreads = 24;
     constexpr int kRequestsPerThread = 5;
 
     std::vector<std::future<bool>> futures;
@@ -758,21 +1053,25 @@ TEST_F(HttpIntegrationTest, ConcurrentAllEndpointsRequests) {
         futures.push_back(std::async(std::launch::async, [t]() {
             for (int r = 0; r < kRequestsPerThread; ++r) {
                 std::string path;
-                if (t % 6 == 0) {
+                if (t % 8 == 0) {
                     path = "/api/v1/health";
-                } else if (t % 6 == 1) {
+                } else if (t % 8 == 1) {
                     path = "/api/v1/system";
-                } else if (t % 6 == 2) {
+                } else if (t % 8 == 2) {
                     path = "/api/v1/cpu";
-                } else if (t % 6 == 3) {
+                } else if (t % 8 == 3) {
                     path = "/api/v1/memory";
-                } else if (t % 6 == 4) {
+                } else if (t % 8 == 4) {
                     path = "/api/v1/disks";
-                } else {
+                } else if (t % 8 == 5) {
                     path = "/api/v1/network";
+                } else if (t % 8 == 6) {
+                    path = "/api/v1/processes";
+                } else {
+                    path = "/api/v1/services";
                 }
                 auto resp = send_http_get(kTestHost, kTestPort, path);
-                if (resp.status_code != 200) {
+                if (resp.status_code != 200 && resp.status_code != 500) {
                     return false;
                 }
                 auto j = nlohmann::json::parse(resp.body);
@@ -794,6 +1093,14 @@ TEST_F(HttpIntegrationTest, ConcurrentAllEndpointsRequests) {
                     }
                 } else if (path == "/api/v1/network") {
                     if (!j.is_array()) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/processes") {
+                    if (!j.is_array()) {
+                        return false;
+                    }
+                } else if (path == "/api/v1/services") {
+                    if (resp.status_code == 200 && !j.is_array()) {
                         return false;
                     }
                 } else {
@@ -923,6 +1230,61 @@ TEST_F(HttpIntegrationTest, RegressionSingleContentTypeHeaderEmission) {
     EXPECT_NE(resp_net_500.get_header("content-type").find("application/json"), std::string::npos);
 
     nodepulse::controllers::NetworkController::set_network_service(nullptr);
+
+    // 13. Processes endpoint (HTTP 200)
+    auto resp_procs = send_http_get(kTestHost, kTestPort, "/api/v1/processes");
+    EXPECT_EQ(resp_procs.status_code, 200);
+    EXPECT_EQ(resp_procs.count_header("content-type"), 1U);
+    EXPECT_NE(resp_procs.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 14. Processes 400 error
+    auto resp_procs_400 = send_http_get(kTestHost, kTestPort, "/api/v1/processes?sort=bad");
+    EXPECT_EQ(resp_procs_400.status_code, 400);
+    EXPECT_EQ(resp_procs_400.count_header("content-type"), 1U);
+    EXPECT_NE(resp_procs_400.get_header("content-type").find("application/json"),
+              std::string::npos);
+
+    // 15. Process detail 404 error
+    auto resp_proc_404 = send_http_get(kTestHost, kTestPort, "/api/v1/processes/999999");
+    EXPECT_EQ(resp_proc_404.status_code, 404);
+    EXPECT_EQ(resp_proc_404.count_header("content-type"), 1U);
+    EXPECT_NE(resp_proc_404.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 16. Services endpoint (HTTP 200)
+    auto mock_service_collector = std::make_shared<nodepulse::collectors::ServiceCollector>();
+    mock_service_collector->set_custom_providers(
+        [](const std::string&) -> std::optional<std::vector<nodepulse::domain::ServiceInfo>> {
+            return std::vector<nodepulse::domain::ServiceInfo>{
+                {"nodepulse.service", "Desc", "loaded", "active", "running", "enabled"}};
+        },
+        nullptr);
+    auto mock_service_mgr =
+        std::make_shared<nodepulse::services::ServiceManagerService>(mock_service_collector);
+    nodepulse::controllers::ServiceController::set_service_manager_service(mock_service_mgr);
+
+    auto resp_svcs = send_http_get(kTestHost, kTestPort, "/api/v1/services");
+    EXPECT_EQ(resp_svcs.status_code, 200);
+    EXPECT_EQ(resp_svcs.count_header("content-type"), 1U);
+    EXPECT_NE(resp_svcs.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 17. Services 400 error
+    auto resp_svcs_400 = send_http_get(kTestHost, kTestPort, "/api/v1/services?state=bad");
+    EXPECT_EQ(resp_svcs_400.status_code, 400);
+    EXPECT_EQ(resp_svcs_400.count_header("content-type"), 1U);
+    EXPECT_NE(resp_svcs_400.get_header("content-type").find("application/json"), std::string::npos);
+
+    // 18. Services 500 error
+    mock_service_collector->set_custom_providers(
+        [](const std::string&) -> std::optional<std::vector<nodepulse::domain::ServiceInfo>> {
+            return std::nullopt;
+        },
+        nullptr);
+    auto resp_svcs_500 = send_http_get(kTestHost, kTestPort, "/api/v1/services");
+    EXPECT_EQ(resp_svcs_500.status_code, 500);
+    EXPECT_EQ(resp_svcs_500.count_header("content-type"), 1U);
+    EXPECT_NE(resp_svcs_500.get_header("content-type").find("application/json"), std::string::npos);
+
+    nodepulse::controllers::ServiceController::set_service_manager_service(nullptr);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

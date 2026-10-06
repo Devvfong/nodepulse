@@ -11,6 +11,8 @@
 #include <nodepulse/controllers/disk_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
+#include <nodepulse/controllers/process_controller.hpp>
+#include <nodepulse/controllers/service_controller.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -67,6 +69,11 @@ void Server::setup() {
 
     if (config_.collectors.network.enabled) {
         controllers::NetworkController::get_network_service()->start_sampling(
+            std::chrono::milliseconds(1000));
+    }
+
+    if (config_.collectors.processes.enabled) {
+        controllers::ProcessController::get_process_service()->start_sampling(
             std::chrono::milliseconds(1000));
     }
 
@@ -172,6 +179,7 @@ void Server::stop() {
     utils::Logger::get()->info("Stopping NodePulse HTTP server");
     controllers::CpuController::get_cpu_service()->stop_sampling();
     controllers::NetworkController::get_network_service()->stop_sampling();
+    controllers::ProcessController::get_process_service()->stop_sampling();
     drogon::app().quit();
 }
 

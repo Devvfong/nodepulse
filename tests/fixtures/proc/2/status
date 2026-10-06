@@ -1,0 +1,10 @@
+Name:	kthreadd
+State:	S (sleeping)
+Tgid:	2
+Pid:	2
+PPid:	0
+Uid:	0	0	0	0
+VmSize:	       0 kB
+VmRSS:	       0 kB
+Threads:	1
+
