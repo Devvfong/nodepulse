@@ -45,6 +45,10 @@ jobs:
             libgtest-dev \
             uuid-dev \
             zlib1g-dev \
+            default-libmysqlclient-dev \
+            libpq-dev \
+            libpqxx-dev \
+            libsqlite3-dev \
             ${{ matrix.compiler.cc }} \
             ${{ matrix.compiler.cxx }}
 
@@ -90,6 +94,10 @@ jobs:
             libgtest-dev \
             uuid-dev \
             zlib1g-dev \
+            default-libmysqlclient-dev \
+            libpq-dev \
+            libpqxx-dev \
+            libsqlite3-dev \
             clang-format-18 \
             clang-tidy-18
 
