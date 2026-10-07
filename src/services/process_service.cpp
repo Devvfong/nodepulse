@@ -10,10 +10,10 @@
 #include <vector>
 
 #include <drogon/drogon.h>
-#include <trantor/utils/ConcurrentTaskQueue.h>
 
 #include <nodepulse/collectors/process_collector.hpp>
 #include <nodepulse/services/process_service.hpp>
+#include <nodepulse/utils/bounded_task_queue.hpp>
 
 #include <unistd.h>
 
@@ -26,7 +26,8 @@ ProcessService::ProcessService(std::shared_ptr<collectors::ProcessCollector> col
         collector_ = std::make_shared<collectors::ProcessCollector>();
     }
     if (!task_queue_) {
-        task_queue_ = std::make_shared<trantor::ConcurrentTaskQueue>(2, "process_worker");
+        task_queue_ = std::make_shared<utils::BoundedTaskQueue>(
+            2, utils::BoundedTaskQueue::kDefaultMaxQueueSize, "process_worker");
     }
 }
 
@@ -237,28 +238,43 @@ std::optional<domain::ProcessDetail> ProcessService::get_process_detail(int32_t 
     return collector_->collect_process_detail(pid, cpu_percent, expected_starttime);
 }
 
-void ProcessService::get_processes_async(
+bool ProcessService::get_processes_async(
     const std::string& sort_field, int limit,
     std::function<void(std::vector<domain::ProcessInfo>)> callback) {
     if (!task_queue_) {
         callback(get_processes(sort_field, limit));
-        return;
+        return true;
+    }
+
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue([this, sort_field, limit, cb = std::move(callback)]() {
+            cb(get_processes(sort_field, limit));
+        });
     }
 
     task_queue_->runTaskInQueue([this, sort_field, limit, callback = std::move(callback)]() {
         callback(get_processes(sort_field, limit));
     });
+    return true;
 }
 
-void ProcessService::get_process_detail_async(
+bool ProcessService::get_process_detail_async(
     int32_t pid, std::function<void(std::optional<domain::ProcessDetail>)> callback) {
     if (!task_queue_) {
         callback(get_process_detail(pid));
-        return;
+        return true;
+    }
+
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue(
+            [this, pid, cb = std::move(callback)]() { cb(get_process_detail(pid)); });
     }
 
     task_queue_->runTaskInQueue(
         [this, pid, callback = std::move(callback)]() { callback(get_process_detail(pid)); });
+    return true;
 }
 
 }  // namespace nodepulse::services

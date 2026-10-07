@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 
 #include <drogon/HttpController.h>
 
@@ -18,14 +19,13 @@ class DiskController : public drogon::HttpController<DiskController> {
     void get_disks(const drogon::HttpRequestPtr& req,
                    std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 
-    static void set_disk_service(std::shared_ptr<services::DiskService> service) {
-        disk_service_ = std::move(service);
-    }
+    static void set_disk_service(std::shared_ptr<services::DiskService> service);
 
     [[nodiscard]] static std::shared_ptr<services::DiskService> get_disk_service();
 
   private:
     static std::shared_ptr<services::DiskService> disk_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

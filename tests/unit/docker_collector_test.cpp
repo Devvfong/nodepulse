@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -288,9 +289,11 @@ TEST(DockerCollectorTest, UnixSocketChunkedAndPartialReadHandling) {
             "5\r\npedia\r\n"
             "0\r\n\r\n";
 
-        ::write(sv[1], part1.data(), part1.size());
+        ssize_t w1 = ::write(sv[1], part1.data(), part1.size());
+        EXPECT_EQ(w1, static_cast<ssize_t>(part1.size()));
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        ::write(sv[1], part2.data(), part2.size());
+        ssize_t w2 = ::write(sv[1], part2.data(), part2.size());
+        EXPECT_EQ(w2, static_cast<ssize_t>(part2.size()));
         ::close(sv[1]);
     });
 
@@ -331,11 +334,11 @@ TEST(DockerCollectorTest, ServiceDelegationAndOffloading) {
     EXPECT_EQ(list_sync.status, DockerStatusResult::kOk);
 
     // Asynchronous test
-    bool async_done = false;
-    service.list_containers_async([&async_done](auto res) {
+    std::atomic<bool> async_done{false};
+    EXPECT_TRUE(service.list_containers_async([&async_done](auto res) {
         EXPECT_EQ(res.status, DockerStatusResult::kOk);
         async_done = true;
-    });
+    }));
 
     // Wait for worker task queue
     for (int i = 0; i < 50 && !async_done; ++i) {

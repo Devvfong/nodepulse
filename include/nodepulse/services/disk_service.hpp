@@ -29,7 +29,7 @@ class DiskService {
 
     [[nodiscard]] std::optional<std::vector<domain::DiskPartitionMetrics>> get_disk_metrics() const;
 
-    void get_disk_metrics_async(MetricsCallback callback) const;
+    bool get_disk_metrics_async(MetricsCallback callback) const;
 
   private:
     std::shared_ptr<collectors::DiskCollector> collector_;

@@ -1,9 +1,8 @@
 #include <algorithm>
 #include <utility>
 
-#include <trantor/utils/ConcurrentTaskQueue.h>
-
 #include <nodepulse/services/service_manager_service.hpp>
+#include <nodepulse/utils/bounded_task_queue.hpp>
 
 namespace nodepulse::services {
 
@@ -15,7 +14,8 @@ ServiceManagerService::ServiceManagerService(
         collector_ = std::make_shared<collectors::ServiceCollector>();
     }
     if (!task_queue_) {
-        task_queue_ = std::make_shared<trantor::ConcurrentTaskQueue>(2, "service_worker");
+        task_queue_ = std::make_shared<utils::BoundedTaskQueue>(
+            2, utils::BoundedTaskQueue::kDefaultMaxQueueSize, "service_worker");
     }
 }
 
@@ -42,26 +42,40 @@ collectors::ServiceDetailResult ServiceManagerService::get_service_detail(const 
     return collector_->get_service_detail(normalized);
 }
 
-void ServiceManagerService::list_services_async(
+bool ServiceManagerService::list_services_async(
     const std::string& state_filter, int limit,
     std::function<void(std::optional<std::vector<domain::ServiceInfo>>)> callback) {
     if (!task_queue_) {
         callback(list_services(state_filter, limit));
-        return;
+        return true;
+    }
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue(
+            [this, state_filter, limit, cb = std::move(callback)]() {
+                cb(list_services(state_filter, limit));
+            });
     }
     task_queue_->runTaskInQueue([this, state_filter, limit, callback = std::move(callback)]() {
         callback(list_services(state_filter, limit));
     });
+    return true;
 }
 
-void ServiceManagerService::get_service_detail_async(
+bool ServiceManagerService::get_service_detail_async(
     const std::string& name, std::function<void(collectors::ServiceDetailResult)> callback) {
     if (!task_queue_) {
         callback(get_service_detail(name));
-        return;
+        return true;
+    }
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue(
+            [this, name, cb = std::move(callback)]() { cb(get_service_detail(name)); });
     }
     task_queue_->runTaskInQueue(
         [this, name, callback = std::move(callback)]() { callback(get_service_detail(name)); });
+    return true;
 }
 
 }  // namespace nodepulse::services

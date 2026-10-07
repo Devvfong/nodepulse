@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpController.h>
@@ -24,14 +25,13 @@ class ProcessController : public drogon::HttpController<ProcessController> {
                             std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                             std::string pid_param);
 
-    static void set_process_service(std::shared_ptr<services::ProcessService> service) {
-        process_service_ = std::move(service);
-    }
+    static void set_process_service(std::shared_ptr<services::ProcessService> service);
 
     [[nodiscard]] static std::shared_ptr<services::ProcessService> get_process_service();
 
   private:
     static std::shared_ptr<services::ProcessService> process_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

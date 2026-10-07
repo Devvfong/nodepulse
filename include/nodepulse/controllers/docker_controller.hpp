@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpController.h>
@@ -24,14 +25,13 @@ class DockerController : public drogon::HttpController<DockerController> {
                              std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                              std::string id_param);
 
-    static void set_docker_service(std::shared_ptr<services::DockerService> service) {
-        docker_service_ = std::move(service);
-    }
+    static void set_docker_service(std::shared_ptr<services::DockerService> service);
 
     [[nodiscard]] static std::shared_ptr<services::DockerService> get_docker_service();
 
   private:
     static std::shared_ptr<services::DockerService> docker_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

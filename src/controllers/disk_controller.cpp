@@ -1,5 +1,6 @@
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpResponse.h>
@@ -12,8 +13,15 @@
 namespace nodepulse::controllers {
 
 std::shared_ptr<services::DiskService> DiskController::disk_service_ = nullptr;
+std::mutex DiskController::mutex_{};
+
+void DiskController::set_disk_service(std::shared_ptr<services::DiskService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    disk_service_ = std::move(service);
+}
 
 std::shared_ptr<services::DiskService> DiskController::get_disk_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!disk_service_) {
         disk_service_ = std::make_shared<services::DiskService>();
     }
@@ -28,7 +36,7 @@ void DiskController::get_disks(const drogon::HttpRequestPtr& req,
     }
 
     auto service = get_disk_service();
-    service->get_disk_metrics_async([callback = std::move(callback), req_id](auto metrics_opt) {
+    bool enqueued = service->get_disk_metrics_async([callback, req_id](auto metrics_opt) {
         if (!metrics_opt.has_value()) {
             nlohmann::json details = nlohmann::json::array(
                 {{{"collector", "disk_collector"}, {"target_file", "/proc/mounts"}}});
@@ -64,6 +72,13 @@ void DiskController::get_disks(const drogon::HttpRequestPtr& req,
 
         callback(resp);
     });
+
+    if (!enqueued) {
+        auto err_resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Disk worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(err_resp);
+    }
 }
 
 }  // namespace nodepulse::controllers

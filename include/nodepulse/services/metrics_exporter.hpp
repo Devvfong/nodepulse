@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include <trantor/utils/ConcurrentTaskQueue.h>
+#include <trantor/utils/TaskQueue.h>
 
 #include <nodepulse/config/config.hpp>
 #include <nodepulse/services/cpu_service.hpp>
@@ -20,6 +20,7 @@
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/network_service.hpp>
 #include <nodepulse/services/stream_service.hpp>
+#include <nodepulse/utils/bounded_task_queue.hpp>
 
 namespace nodepulse::services {
 
@@ -61,7 +62,7 @@ class MetricsExporter {
                              std::shared_ptr<trantor::TaskQueue> task_queue = nullptr);
 
     [[nodiscard]] std::string export_metrics() const;
-    void export_metrics_async(std::function<void(std::string)> callback) const;
+    bool export_metrics_async(std::function<void(std::string)> callback) const;
 
     [[nodiscard]] bool is_enabled() const noexcept;
     void set_enabled(bool enabled) noexcept;

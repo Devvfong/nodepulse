@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +25,7 @@ class MockSseClient : public nodepulse::services::ISseClient {
     explicit MockSseClient(bool succeed = true) : return_success(succeed) {}
 
     bool send_data(const std::string& chunk) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (!alive || !return_success) {
             alive = false;
             return false;
@@ -33,11 +35,13 @@ class MockSseClient : public nodepulse::services::ISseClient {
     }
 
     void close() override {
+        std::lock_guard<std::mutex> lock(mutex_);
         alive = false;
         closed = true;
     }
 
     [[nodiscard]] bool is_alive() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
         return alive;
     }
 
@@ -45,6 +49,9 @@ class MockSseClient : public nodepulse::services::ISseClient {
     bool alive{true};
     bool closed{false};
     std::vector<std::string> sent_chunks;
+
+  private:
+    mutable std::mutex mutex_;
 };
 
 }  // namespace

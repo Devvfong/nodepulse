@@ -43,10 +43,10 @@ class ProcessService {
     [[nodiscard]] virtual std::optional<domain::ProcessDetail> get_process_detail(int32_t pid);
 
     // Asynchronous worker offloading (DEC-013)
-    void get_processes_async(const std::string& sort_field, int limit,
+    bool get_processes_async(const std::string& sort_field, int limit,
                              std::function<void(std::vector<domain::ProcessInfo>)> callback);
 
-    void get_process_detail_async(
+    bool get_process_detail_async(
         int32_t pid, std::function<void(std::optional<domain::ProcessDetail>)> callback);
 
     // Manual sampling helper for testing

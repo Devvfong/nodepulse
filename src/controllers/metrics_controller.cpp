@@ -66,7 +66,7 @@ void MetricsController::get_metrics(
         return;
     }
 
-    exporter->export_metrics_async([callback = std::move(callback), req_id](std::string body) {
+    bool enqueued = exporter->export_metrics_async([callback, req_id](std::string body) {
         auto resp = drogon::HttpResponse::newHttpResponse();
         resp->setStatusCode(drogon::k200OK);
         resp->setContentTypeCodeAndCustomString(drogon::CT_CUSTOM,
@@ -75,6 +75,13 @@ void MetricsController::get_metrics(
         resp->addHeader("X-Request-ID", req_id);
         callback(resp);
     });
+
+    if (!enqueued) {
+        auto resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Metrics exporter worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(resp);
+    }
 }
 
 }  // namespace nodepulse::controllers

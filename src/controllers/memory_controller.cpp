@@ -1,5 +1,6 @@
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpResponse.h>
@@ -12,8 +13,15 @@
 namespace nodepulse::controllers {
 
 std::shared_ptr<services::MemoryService> MemoryController::memory_service_ = nullptr;
+std::mutex MemoryController::mutex_{};
+
+void MemoryController::set_memory_service(std::shared_ptr<services::MemoryService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    memory_service_ = std::move(service);
+}
 
 std::shared_ptr<services::MemoryService> MemoryController::get_memory_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!memory_service_) {
         memory_service_ = std::make_shared<services::MemoryService>();
     }

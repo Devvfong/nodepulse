@@ -25,9 +25,11 @@ class DockerService {
     [[nodiscard]] virtual collectors::DockerContainerDetailResult get_container(
         const std::string& id);
 
-    void list_containers_async(std::function<void(collectors::DockerContainersResult)> callback);
-    void get_container_async(const std::string& id,
-                             std::function<void(collectors::DockerContainerDetailResult)> callback);
+    [[nodiscard]] bool list_containers_async(
+        std::function<void(collectors::DockerContainersResult)> callback);
+    [[nodiscard]] bool get_container_async(
+        const std::string& id,
+        std::function<void(collectors::DockerContainerDetailResult)> callback);
 
     [[nodiscard]] const std::string& socket_path() const noexcept {
         return collector_ ? collector_->socket_path() : default_socket_path_;

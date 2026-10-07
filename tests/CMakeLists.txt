@@ -19,6 +19,7 @@ add_executable(tests_unit
     unit/metrics_exporter_test.cpp
     unit/postgres_repository_test.cpp
     unit/history_service_test.cpp
+    unit/bounded_task_queue_test.cpp
 )
 
 target_link_libraries(tests_unit
@@ -68,3 +69,12 @@ gtest_discover_tests(tests_unit
 gtest_discover_tests(tests_integration
     DISCOVERY_MODE PRE_TEST
 )
+
+# Operations / Installer Test
+find_program(BASH_PROGRAM bash)
+if(BASH_PROGRAM)
+    add_test(
+        NAME OperationsTest.InstallPreflight
+        COMMAND ${BASH_PROGRAM} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_install_preflight.sh $<TARGET_FILE:nodepulse_server>
+    )
+endif()

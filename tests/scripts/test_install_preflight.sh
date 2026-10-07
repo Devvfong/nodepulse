@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-BINARY="${REPO_ROOT}/build/apps/server/nodepulse_server"
+BINARY="${1:-${REPO_ROOT}/build/apps/server/nodepulse_server}"
 
 if [ ! -f "${BINARY}" ]; then
     echo "Error: ${BINARY} does not exist. Build the project first." >&2

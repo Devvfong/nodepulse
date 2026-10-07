@@ -203,20 +203,29 @@ TEST(CpuServiceTest, FirstSampleReturnsNullUsageAndWarmingUpPerDec014) {
 // Subclass helper to dynamically supply samples
 class DynamicCpuCollector : public CpuCollector {
   public:
+    mutable std::mutex mutex;
     std::string current_stat_content;
     std::string current_loadavg_content{"0.45 0.62 0.58 2/850 12345"};
     std::string current_cpuinfo_content{
         "processor: 0\nmodel name: Mock CPU\nphysical id: 0\ncore id: 0\n"};
 
+    void set_stat_content(const std::string& content) {
+        std::lock_guard<std::mutex> lock(mutex);
+        current_stat_content = content;
+    }
+
     [[nodiscard]] std::optional<CpuSnapshot> read_stat() const override {
+        std::lock_guard<std::mutex> lock(mutex);
         std::istringstream stream(current_stat_content);
         return parse_stat_stream(stream);
     }
     [[nodiscard]] std::optional<nodepulse::domain::LoadAverage> read_loadavg() const override {
+        std::lock_guard<std::mutex> lock(mutex);
         std::istringstream stream(current_loadavg_content);
         return parse_loadavg_stream(stream);
     }
     [[nodiscard]] CpuStaticInfo read_cpuinfo() const override {
+        std::lock_guard<std::mutex> lock(mutex);
         std::istringstream stream(current_cpuinfo_content);
         return parse_cpuinfo_stream(stream);
     }
@@ -376,7 +385,7 @@ TEST(CpuServiceTest, StealTimeAndGuestAccountingSemantics) {
 
 TEST(CpuServiceTest, BackgroundSamplingThreadEstablishesUsableInterval) {
     auto collector = std::make_shared<DynamicCpuCollector>();
-    collector->current_stat_content = "cpu  1000 0 500 8500 0 0 0 0 0 0\n";
+    collector->set_stat_content("cpu  1000 0 500 8500 0 0 0 0 0 0\n");
     CpuService service(collector);
 
     // Start background sampling at 30ms interval
@@ -390,7 +399,7 @@ TEST(CpuServiceTest, BackgroundSamplingThreadEstablishesUsableInterval) {
     EXPECT_EQ(m1->measurement_status, "warming_up");
 
     // Advance stat content
-    collector->current_stat_content = "cpu  1300 0 700 9000 0 0 0 0 0 0\n";
+    collector->set_stat_content("cpu  1300 0 700 9000 0 0 0 0 0 0\n");
 
     // Wait 70ms for background thread to take at least one sample
     std::this_thread::sleep_for(std::chrono::milliseconds(70));

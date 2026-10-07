@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpController.h>
@@ -25,15 +26,14 @@ class ServiceController : public drogon::HttpController<ServiceController> {
                              std::string name_param);
 
     static void set_service_manager_service(
-        std::shared_ptr<services::ServiceManagerService> service) {
-        service_manager_service_ = std::move(service);
-    }
+        std::shared_ptr<services::ServiceManagerService> service);
 
     [[nodiscard]] static std::shared_ptr<services::ServiceManagerService>
     get_service_manager_service();
 
   private:
     static std::shared_ptr<services::ServiceManagerService> service_manager_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

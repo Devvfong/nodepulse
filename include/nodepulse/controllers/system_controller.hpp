@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 
 #include <drogon/HttpController.h>
 
@@ -18,14 +19,13 @@ class SystemController : public drogon::HttpController<SystemController> {
     void get_system(const drogon::HttpRequestPtr& req,
                     std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 
-    static void set_system_service(std::shared_ptr<services::SystemService> service) {
-        system_service_ = std::move(service);
-    }
+    static void set_system_service(std::shared_ptr<services::SystemService> service);
 
     [[nodiscard]] static std::shared_ptr<services::SystemService> get_system_service();
 
   private:
     static std::shared_ptr<services::SystemService> system_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

@@ -1,5 +1,6 @@
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,8 +16,15 @@
 namespace nodepulse::controllers {
 
 std::shared_ptr<services::DockerService> DockerController::docker_service_ = nullptr;
+std::mutex DockerController::mutex_{};
+
+void DockerController::set_docker_service(std::shared_ptr<services::DockerService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    docker_service_ = std::move(service);
+}
 
 std::shared_ptr<services::DockerService> DockerController::get_docker_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!docker_service_) {
         docker_service_ = std::make_shared<services::DockerService>();
     }
@@ -34,7 +42,7 @@ void DockerController::get_containers(
     auto service = get_docker_service();
     std::string socket_path = service->socket_path();
 
-    service->list_containers_async([callback = std::move(callback), req_id, socket_path](auto res) {
+    const bool enqueued = service->list_containers_async([callback, req_id, socket_path](auto res) {
         if (res.status == collectors::DockerStatusResult::kUnavailable) {
             nlohmann::json details = nlohmann::json::array({{{"socket_path", socket_path}}});
             auto err_resp = utils::make_error_response(
@@ -77,6 +85,12 @@ void DockerController::get_containers(
 
         callback(resp);
     });
+    if (!enqueued) {
+        auto err_resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Docker worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(err_resp);
+    }
 }
 
 void DockerController::get_container_by_id(
@@ -100,62 +114,68 @@ void DockerController::get_container_by_id(
     auto service = get_docker_service();
     std::string socket_path = service->socket_path();
 
-    service->get_container_async(id_param, [callback = std::move(callback), req_id, socket_path,
-                                            id_param](auto res) {
-        if (res.status == collectors::DockerStatusResult::kNotFound) {
-            nlohmann::json details =
-                nlohmann::json::array({{{"resource_type", "container"}, {"identifier", id_param}}});
-            auto err_resp = utils::make_error_response(
-                drogon::k404NotFound, utils::error_codes::kResourceNotFound,
-                "Container '" + id_param + "' was not found.", details, req_id);
-            callback(err_resp);
-            return;
-        }
+    const bool enqueued =
+        service->get_container_async(id_param, [callback, req_id, socket_path, id_param](auto res) {
+            if (res.status == collectors::DockerStatusResult::kNotFound) {
+                nlohmann::json details = nlohmann::json::array(
+                    {{{"resource_type", "container"}, {"identifier", id_param}}});
+                auto err_resp = utils::make_error_response(
+                    drogon::k404NotFound, utils::error_codes::kResourceNotFound,
+                    "Container '" + id_param + "' was not found.", details, req_id);
+                callback(err_resp);
+                return;
+            }
 
-        if (res.status == collectors::DockerStatusResult::kUnavailable) {
-            nlohmann::json details = nlohmann::json::array({{{"socket_path", socket_path}}});
-            auto err_resp = utils::make_error_response(
-                drogon::k503ServiceUnavailable, utils::error_codes::kDockerUnavailable,
-                "Docker daemon is not running or socket " + socket_path + " is inaccessible.",
-                details, req_id);
-            callback(err_resp);
-            return;
-        }
+            if (res.status == collectors::DockerStatusResult::kUnavailable) {
+                nlohmann::json details = nlohmann::json::array({{{"socket_path", socket_path}}});
+                auto err_resp = utils::make_error_response(
+                    drogon::k503ServiceUnavailable, utils::error_codes::kDockerUnavailable,
+                    "Docker daemon is not running or socket " + socket_path + " is inaccessible.",
+                    details, req_id);
+                callback(err_resp);
+                return;
+            }
 
-        if (res.status == collectors::DockerStatusResult::kCollectorFailure ||
-            !res.detail.has_value()) {
-            nlohmann::json details = nlohmann::json::array(
-                {{{"collector", "docker_collector"}, {"reason", res.error_message}}});
-            auto err_resp = utils::make_error_response(
-                drogon::k500InternalServerError, utils::error_codes::kCollectorFailure,
-                "Failed to collect Docker container details.", details, req_id);
-            callback(err_resp);
-            return;
-        }
+            if (res.status == collectors::DockerStatusResult::kCollectorFailure ||
+                !res.detail.has_value()) {
+                nlohmann::json details = nlohmann::json::array(
+                    {{{"collector", "docker_collector"}, {"reason", res.error_message}}});
+                auto err_resp = utils::make_error_response(
+                    drogon::k500InternalServerError, utils::error_codes::kCollectorFailure,
+                    "Failed to collect Docker container details.", details, req_id);
+                callback(err_resp);
+                return;
+            }
 
-        const auto& d = *res.detail;
-        nlohmann::json body = {{"id", d.id},
-                               {"name", d.name},
-                               {"image", d.image},
-                               {"status", d.status},
-                               {"state", d.state},
-                               {"running", d.running},
-                               {"exit_code", d.exit_code},
-                               {"port_mappings", d.port_mappings},
-                               {"mount_sources", d.mount_sources},
-                               {"created", d.created}};
+            const auto& d = *res.detail;
+            nlohmann::json body = {{"id", d.id},
+                                   {"name", d.name},
+                                   {"image", d.image},
+                                   {"status", d.status},
+                                   {"state", d.state},
+                                   {"running", d.running},
+                                   {"exit_code", d.exit_code},
+                                   {"port_mappings", d.port_mappings},
+                                   {"mount_sources", d.mount_sources},
+                                   {"created", d.created}};
 
-        auto resp = drogon::HttpResponse::newHttpResponse();
-        resp->setStatusCode(drogon::k200OK);
-        resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-        resp->setBody(body.dump());
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            resp->setStatusCode(drogon::k200OK);
+            resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+            resp->setBody(body.dump());
 
-        if (!req_id.empty()) {
-            resp->addHeader("X-Request-ID", req_id);
-        }
+            if (!req_id.empty()) {
+                resp->addHeader("X-Request-ID", req_id);
+            }
 
-        callback(resp);
-    });
+            callback(resp);
+        });
+    if (!enqueued) {
+        auto err_resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Docker worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(err_resp);
+    }
 }
 
 }  // namespace nodepulse::controllers

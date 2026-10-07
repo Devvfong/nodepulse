@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <drogon/HttpController.h>
@@ -19,14 +20,13 @@ class EventsController : public drogon::HttpController<EventsController> {
     void get_events(const drogon::HttpRequestPtr& req,
                     std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 
-    static void set_stream_service(std::shared_ptr<services::StreamService> service) {
-        stream_service_ = std::move(service);
-    }
+    static void set_stream_service(std::shared_ptr<services::StreamService> service);
 
     [[nodiscard]] static std::shared_ptr<services::StreamService> get_stream_service();
 
   private:
     static std::shared_ptr<services::StreamService> stream_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

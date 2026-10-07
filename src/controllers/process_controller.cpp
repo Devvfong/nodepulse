@@ -1,6 +1,7 @@
 #include <charconv>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,8 +16,15 @@
 namespace nodepulse::controllers {
 
 std::shared_ptr<services::ProcessService> ProcessController::process_service_ = nullptr;
+std::mutex ProcessController::mutex_{};
+
+void ProcessController::set_process_service(std::shared_ptr<services::ProcessService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    process_service_ = std::move(service);
+}
 
 std::shared_ptr<services::ProcessService> ProcessController::get_process_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!process_service_) {
         process_service_ = std::make_shared<services::ProcessService>();
     }
@@ -75,9 +83,8 @@ void ProcessController::get_processes(
     }
 
     auto service = get_process_service();
-    service->get_processes_async(
-        sort_param, limit_val,
-        [callback = std::move(callback), req_id](std::vector<domain::ProcessInfo> processes) {
+    bool enqueued = service->get_processes_async(
+        sort_param, limit_val, [callback, req_id](std::vector<domain::ProcessInfo> processes) {
             nlohmann::json body = nlohmann::json::array();
             for (const auto& proc : processes) {
                 body.push_back({{"pid", proc.pid},
@@ -100,6 +107,13 @@ void ProcessController::get_processes(
 
             callback(resp);
         });
+
+    if (!enqueued) {
+        auto resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Process worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(resp);
+    }
 }
 
 void ProcessController::get_process_by_pid(
@@ -127,44 +141,51 @@ void ProcessController::get_process_by_pid(
 
     int32_t pid = static_cast<int32_t>(parsed_pid);
 
-    service->get_process_detail_async(pid, [callback = std::move(callback), req_id,
-                                            pid](std::optional<domain::ProcessDetail> detail_opt) {
-        if (!detail_opt.has_value()) {
-            nlohmann::json details = nlohmann::json::array(
-                {{{"resource_type", "process"}, {"identifier", std::to_string(pid)}}});
-            auto err_resp = utils::make_error_response(
-                drogon::k404NotFound, utils::error_codes::kResourceNotFound,
-                "Process with PID " + std::to_string(pid) + " was not found.", details, req_id);
-            callback(err_resp);
-            return;
-        }
+    bool enqueued = service->get_process_detail_async(
+        pid, [callback, req_id, pid](std::optional<domain::ProcessDetail> detail_opt) {
+            if (!detail_opt.has_value()) {
+                nlohmann::json details = nlohmann::json::array(
+                    {{{"resource_type", "process"}, {"identifier", std::to_string(pid)}}});
+                auto err_resp = utils::make_error_response(
+                    drogon::k404NotFound, utils::error_codes::kResourceNotFound,
+                    "Process with PID " + std::to_string(pid) + " was not found.", details, req_id);
+                callback(err_resp);
+                return;
+            }
 
-        const auto& detail = *detail_opt;
-        nlohmann::json body = {{"pid", detail.pid},
-                               {"ppid", detail.ppid},
-                               {"name", detail.name},
-                               {"user", detail.user},
-                               {"state", detail.state},
-                               {"cpu_percent", detail.cpu_percent},
-                               {"memory_rss_bytes", detail.memory_rss_bytes},
-                               {"memory_vms_bytes", detail.memory_vms_bytes},
-                               {"thread_count", detail.thread_count},
-                               {"open_fd_count", detail.open_fd_count},
-                               {"start_time_epoch", detail.start_time_epoch},
-                               {"cmdline", detail.cmdline},
-                               {"working_directory", detail.working_directory}};
+            const auto& detail = *detail_opt;
+            nlohmann::json body = {{"pid", detail.pid},
+                                   {"ppid", detail.ppid},
+                                   {"name", detail.name},
+                                   {"user", detail.user},
+                                   {"state", detail.state},
+                                   {"cpu_percent", detail.cpu_percent},
+                                   {"memory_rss_bytes", detail.memory_rss_bytes},
+                                   {"memory_vms_bytes", detail.memory_vms_bytes},
+                                   {"thread_count", detail.thread_count},
+                                   {"open_fd_count", detail.open_fd_count},
+                                   {"start_time_epoch", detail.start_time_epoch},
+                                   {"cmdline", detail.cmdline},
+                                   {"working_directory", detail.working_directory}};
 
-        auto resp = drogon::HttpResponse::newHttpResponse();
-        resp->setStatusCode(drogon::k200OK);
-        resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-        resp->setBody(body.dump());
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            resp->setStatusCode(drogon::k200OK);
+            resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+            resp->setBody(body.dump());
 
-        if (!req_id.empty()) {
-            resp->addHeader("X-Request-ID", req_id);
-        }
+            if (!req_id.empty()) {
+                resp->addHeader("X-Request-ID", req_id);
+            }
 
+            callback(resp);
+        });
+
+    if (!enqueued) {
+        auto resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Process worker queue is saturated.", nlohmann::json::array(), req_id);
         callback(resp);
-    });
+    }
 }
 
 }  // namespace nodepulse::controllers

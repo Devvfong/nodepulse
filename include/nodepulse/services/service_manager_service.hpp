@@ -29,11 +29,11 @@ class ServiceManagerService {
     [[nodiscard]] virtual collectors::ServiceDetailResult get_service_detail(
         const std::string& name);
 
-    void list_services_async(
+    bool list_services_async(
         const std::string& state_filter, int limit,
         std::function<void(std::optional<std::vector<domain::ServiceInfo>>)> callback);
 
-    void get_service_detail_async(const std::string& name,
+    bool get_service_detail_async(const std::string& name,
                                   std::function<void(collectors::ServiceDetailResult)> callback);
 
   private:

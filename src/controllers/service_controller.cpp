@@ -1,6 +1,7 @@
 #include <charconv>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,8 +18,16 @@ namespace nodepulse::controllers {
 
 std::shared_ptr<services::ServiceManagerService> ServiceController::service_manager_service_ =
     nullptr;
+std::mutex ServiceController::mutex_{};
+
+void ServiceController::set_service_manager_service(
+    std::shared_ptr<services::ServiceManagerService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    service_manager_service_ = std::move(service);
+}
 
 std::shared_ptr<services::ServiceManagerService> ServiceController::get_service_manager_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!service_manager_service_) {
         service_manager_service_ = std::make_shared<services::ServiceManagerService>();
     }
@@ -79,8 +88,8 @@ void ServiceController::get_services(
     }
 
     auto service = get_service_manager_service();
-    service->list_services_async(
-        state_param, limit_val, [callback = std::move(callback), req_id](auto services_opt) {
+    const bool enqueued =
+        service->list_services_async(state_param, limit_val, [callback, req_id](auto services_opt) {
             if (!services_opt.has_value()) {
                 nlohmann::json details =
                     nlohmann::json::array({{{"collector", "service_collector"},
@@ -113,6 +122,12 @@ void ServiceController::get_services(
 
             callback(resp);
         });
+    if (!enqueued) {
+        auto err_resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Service manager worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(err_resp);
+    }
 }
 
 void ServiceController::get_service_by_name(
@@ -134,8 +149,8 @@ void ServiceController::get_service_by_name(
     }
 
     auto service = get_service_manager_service();
-    service->get_service_detail_async(name_param, [callback = std::move(callback), req_id,
-                                                   name_param](auto res) {
+    const bool enqueued = service->get_service_detail_async(name_param, [callback, req_id,
+                                                                         name_param](auto res) {
         if (res.status == collectors::ServiceStatusResult::kNotFound) {
             nlohmann::json details =
                 nlohmann::json::array({{{"resource_type", "service"}, {"identifier", name_param}}});
@@ -180,6 +195,12 @@ void ServiceController::get_service_by_name(
 
         callback(resp);
     });
+    if (!enqueued) {
+        auto err_resp = utils::make_error_response(
+            drogon::k503ServiceUnavailable, utils::error_codes::kServiceUnavailable,
+            "Service manager worker queue is saturated.", nlohmann::json::array(), req_id);
+        callback(err_resp);
+    }
 }
 
 }  // namespace nodepulse::controllers

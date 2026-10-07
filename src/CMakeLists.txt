@@ -37,6 +37,7 @@ add_library(nodepulse_lib STATIC
     utils/error_response.cpp
     utils/logger.cpp
     utils/security.cpp
+    utils/bounded_task_queue.cpp
 )
 
 target_include_directories(nodepulse_lib

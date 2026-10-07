@@ -148,7 +148,8 @@ MetricsExporter::MetricsExporter(std::shared_ptr<CpuService> cpu_service,
       task_queue_(std::move(task_queue)),
       start_time_(std::chrono::steady_clock::now()) {
     if (!task_queue_) {
-        task_queue_ = std::make_shared<trantor::ConcurrentTaskQueue>(2, "prom_worker");
+        task_queue_ = std::make_shared<utils::BoundedTaskQueue>(
+            2, utils::BoundedTaskQueue::kDefaultMaxQueueSize, "prom_worker");
     }
 }
 
@@ -499,10 +500,20 @@ std::string MetricsExporter::export_metrics() const {
     return out;
 }
 
-void MetricsExporter::export_metrics_async(std::function<void(std::string)> callback) const {
+bool MetricsExporter::export_metrics_async(std::function<void(std::string)> callback) const {
     if (!task_queue_) {
         callback(export_metrics());
-        return;
+        return true;
+    }
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue([this, cb = std::move(callback)]() mutable {
+            try {
+                cb(export_metrics());
+            } catch (...) {
+                cb("");
+            }
+        });
     }
     task_queue_->runTaskInQueue([this, cb = std::move(callback)]() mutable {
         try {
@@ -511,6 +522,7 @@ void MetricsExporter::export_metrics_async(std::function<void(std::string)> call
             cb("");
         }
     });
+    return true;
 }
 
 }  // namespace nodepulse::services

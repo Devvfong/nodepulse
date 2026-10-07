@@ -131,3 +131,17 @@ This document consolidates and indexes all foundational architectural, technical
     4. **Security & Credential Redaction**:
        - Connection strings (`postgres.connection_string`, `NODEPULSE_POSTGRES_URL`) containing secrets are strictly masked in all logs, internal state, and exceptions via `nodepulse::utils::redact_connection_string()`, handling both URI (`postgresql://user:pass@host/db`) and libpq key-value (`host=... password=...`) syntaxes.
 - **Consequences**: Scalable, secure historical telemetry persistence with zero impact on real-time event loop latency or core agent availability during database outages.
+
+### DEC-018: Bounded Request-Driven Background Task Queues and Overload Protection (Phase 16)
+- **Context**:
+  - Controllers serving expensive or blocking operations (such as `MetricsController::get_metrics`) offload work from Drogon's reactive event loop onto background task queues to maintain responsive HTTP handling (`BR-004`).
+  - Previously, `trantor::ConcurrentTaskQueue` was used. However, `trantor::ConcurrentTaskQueue` maintains an unbounded FIFO queue with no admission checks or capacity bounds. Under sustained load or slow system metric collection, unbounded task accumulation leads to unbounded memory growth, request buffer bloat, and potential Out-Of-Memory (OOM) termination. Furthermore, Drogon/Trantor internal task queue execution models exhibited thread synchronization races under ThreadSanitizer.
+- **Decision**:
+  1. **Replacement with `BoundedTaskQueue`**: Replace `trantor::ConcurrentTaskQueue` with a custom `BoundedTaskQueue` providing explicit capacity bounding, thread-safe admission control (`try_push()`), and a dedicated worker thread.
+  2. **Hard Capacity Bound of 64**: Limit the background task queue capacity to a fixed bound of 64 tasks. This provides sufficient queueing depth to absorb transient concurrency bursts while strictly constraining peak memory usage and worst-case latency.
+  3. **Overload Handling via HTTP 503 `SERVICE_UNAVAILABLE`**: When the task queue is saturated (`try_push()` returns false), the incoming request is immediately rejected with HTTP 503 `SERVICE_UNAVAILABLE` (standard JSON error envelope with error code `SERVICE_UNAVAILABLE` and descriptive message `"Metrics exposition task queue saturated"`). HTTP 429 remains strictly reserved for client request-rate limiter exhaustion (DEC-016).
+  4. **Clean Worker Lifecycle**: On destruction or shutdown, remaining queued tasks are drained or gracefully terminated without hanging or deadlocking the server process.
+- **Consequences**:
+  - Eliminates unbounded queue growth and memory exhaustion under scrape storms.
+  - Ensures deterministic backpressure to HTTP clients during system overload.
+  - Replaces external framework queue dependencies with fully instrumentable, thread-safe C++20 concurrency primitives verified clean under ThreadSanitizer.

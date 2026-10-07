@@ -1,4 +1,5 @@
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -11,8 +12,15 @@
 namespace nodepulse::controllers {
 
 std::shared_ptr<services::StreamService> EventsController::stream_service_ = nullptr;
+std::mutex EventsController::mutex_{};
+
+void EventsController::set_stream_service(std::shared_ptr<services::StreamService> service) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stream_service_ = std::move(service);
+}
 
 std::shared_ptr<services::StreamService> EventsController::get_stream_service() {
+    std::lock_guard<std::mutex> lock(mutex_);
     return stream_service_;
 }
 

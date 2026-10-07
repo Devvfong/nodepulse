@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 
 #include <drogon/HttpController.h>
 
@@ -18,14 +19,13 @@ class MemoryController : public drogon::HttpController<MemoryController> {
     void get_memory(const drogon::HttpRequestPtr& req,
                     std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 
-    static void set_memory_service(std::shared_ptr<services::MemoryService> service) {
-        memory_service_ = std::move(service);
-    }
+    static void set_memory_service(std::shared_ptr<services::MemoryService> service);
 
     [[nodiscard]] static std::shared_ptr<services::MemoryService> get_memory_service();
 
   private:
     static std::shared_ptr<services::MemoryService> memory_service_;
+    static std::mutex mutex_;
 };
 
 }  // namespace nodepulse::controllers

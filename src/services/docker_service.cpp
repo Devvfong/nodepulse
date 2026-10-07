@@ -1,9 +1,8 @@
 #include <memory>
 #include <utility>
 
-#include <trantor/utils/ConcurrentTaskQueue.h>
-
 #include <nodepulse/services/docker_service.hpp>
+#include <nodepulse/utils/bounded_task_queue.hpp>
 
 namespace nodepulse::services {
 
@@ -14,7 +13,8 @@ DockerService::DockerService(std::shared_ptr<collectors::DockerCollector> collec
         collector_ = std::make_shared<collectors::DockerCollector>();
     }
     if (!task_queue_) {
-        task_queue_ = std::make_shared<trantor::ConcurrentTaskQueue>(2, "docker_worker");
+        task_queue_ = std::make_shared<utils::BoundedTaskQueue>(
+            2, utils::BoundedTaskQueue::kDefaultMaxQueueSize, "docker_worker");
     }
 }
 
@@ -34,24 +34,36 @@ collectors::DockerContainerDetailResult DockerService::get_container(const std::
     return collector_->get_container(id);
 }
 
-void DockerService::list_containers_async(
+bool DockerService::list_containers_async(
     std::function<void(collectors::DockerContainersResult)> callback) {
     if (!task_queue_) {
         callback(list_containers());
-        return;
+        return true;
+    }
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue(
+            [this, cb = std::move(callback)]() mutable { cb(list_containers()); });
     }
     task_queue_->runTaskInQueue(
         [this, cb = std::move(callback)]() mutable { cb(list_containers()); });
+    return true;
 }
 
-void DockerService::get_container_async(
+bool DockerService::get_container_async(
     const std::string& id, std::function<void(collectors::DockerContainerDetailResult)> callback) {
     if (!task_queue_) {
         callback(get_container(id));
-        return;
+        return true;
+    }
+    auto bounded_q = std::dynamic_pointer_cast<utils::BoundedTaskQueue>(task_queue_);
+    if (bounded_q) {
+        return bounded_q->tryRunTaskInQueue(
+            [this, id, cb = std::move(callback)]() mutable { cb(get_container(id)); });
     }
     task_queue_->runTaskInQueue(
         [this, id, cb = std::move(callback)]() mutable { cb(get_container(id)); });
+    return true;
 }
 
 }  // namespace nodepulse::services
