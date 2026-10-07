@@ -52,6 +52,7 @@ jobs:
             libsqlite3-dev \
             libbrotli-dev \
             libhiredis-dev \
+            libyaml-cpp-dev \
             ${{ matrix.compiler.cc }} \
             ${{ matrix.compiler.cxx }}
 
@@ -104,6 +105,7 @@ jobs:
             libsqlite3-dev \
             libbrotli-dev \
             libhiredis-dev \
+            libyaml-cpp-dev \
             clang-format-18 \
             clang-tidy-18
 
