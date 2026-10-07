@@ -7,7 +7,7 @@ set -euo pipefail
 PREFIX="${PREFIX:-/usr/local}"
 SYSCONFDIR="${SYSCONFDIR:-/etc/nodepulse}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
-LOG_DIR="${DESTDIR:-}/var/log/nodepulse"
+LOG_DIR="${LOG_DIR:-${DESTDIR:-}/var/log/nodepulse}"
 
 BIN_DEST="${DESTDIR:-}${PREFIX}/bin"
 CONF_DEST="${DESTDIR:-}${SYSCONFDIR}"
@@ -60,7 +60,28 @@ mkdir -p "${BIN_DEST}"
 install -m 0755 "${BINARY_SOURCE}" "${BIN_DEST}/nodepulse_server"
 echo "Installed binary: ${BIN_DEST}/nodepulse_server"
 
-# 3. Install configuration (do NOT overwrite existing config)
+# 3. Verify runtime shared library dependencies
+INSTALLED_BIN="${BIN_DEST}/nodepulse_server"
+if command -v ldd >/dev/null 2>&1; then
+    MISSING_LIBS=$(ldd "${INSTALLED_BIN}" 2>&1 | grep "=> not found" || true)
+    if [ -n "${MISSING_LIBS}" ]; then
+        if [ -n "${DESTDIR:-}" ]; then
+            echo "Notice (DESTDIR staging): Staged binary has unresolved shared libraries outside staging environment:" >&2
+            echo "${MISSING_LIBS}" | sed 's/^/  /' >&2
+            echo "Ensure required runtime libraries are installed in target system paths before running." >&2
+        else
+            echo "Error: Unresolved runtime shared library dependencies detected for ${INSTALLED_BIN}:" >&2
+            echo "${MISSING_LIBS}" | sed 's/^/  /' >&2
+            echo "" >&2
+            echo "NodePulse requires its shared runtime libraries to be installed in standard system" >&2
+            echo "library paths (e.g. /usr/lib, /usr/local/lib) and registered with ldconfig." >&2
+            echo "Please install all missing runtime dependencies on the target host before installing NodePulse." >&2
+            exit 1
+        fi
+    fi
+fi
+
+# 4. Install configuration (do NOT overwrite existing config)
 mkdir -p "${CONF_DEST}"
 CONFIG_TEMPLATE="${REPO_ROOT}/config/config.example.json"
 if [ -f "${CONFIG_TEMPLATE}" ]; then
@@ -77,7 +98,7 @@ if [ -f "${CONFIG_TEMPLATE}" ]; then
     fi
 fi
 
-# 4. Create log directory
+# 5. Create log directory
 mkdir -p "${LOG_DIR}"
 if [ -z "${DESTDIR:-}" ] && [ "$(id -u)" -eq 0 ]; then
     chown nodepulse:nodepulse "${LOG_DIR}" 2>/dev/null || true
@@ -85,7 +106,7 @@ if [ -z "${DESTDIR:-}" ] && [ "$(id -u)" -eq 0 ]; then
 fi
 echo "Created log directory: ${LOG_DIR}"
 
-# 5. Install systemd service unit
+# 6. Install systemd service unit
 mkdir -p "${UNIT_DEST}"
 if [ -f "${REPO_ROOT}/infrastructure/systemd/nodepulse.service.in" ]; then
     sed -e "s|@NODEPULSE_INSTALL_FULL_BINDIR@|${PREFIX}/bin|g" \
@@ -102,7 +123,7 @@ elif [ -f "${REPO_ROOT}/infrastructure/systemd/nodepulse.service" ]; then
     echo "Installed systemd unit: ${UNIT_DEST}/nodepulse.service"
 fi
 
-# 6. Reload systemd daemon if on live system as root
+# 7. Reload systemd daemon if on live system as root
 if [ -z "${DESTDIR:-}" ] && [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
     if systemctl is-system-running >/dev/null 2>&1 || [ -d /run/systemd/system ]; then
         echo "Reloading systemd manager configuration..."

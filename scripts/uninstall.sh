@@ -7,7 +7,7 @@ set -euo pipefail
 PREFIX="${PREFIX:-/usr/local}"
 SYSCONFDIR="${SYSCONFDIR:-/etc/nodepulse}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
-LOG_DIR="${DESTDIR:-}/var/log/nodepulse"
+LOG_DIR="${LOG_DIR:-${DESTDIR:-}/var/log/nodepulse}"
 
 BIN_DEST="${DESTDIR:-}${PREFIX}/bin"
 CONF_DEST="${DESTDIR:-}${SYSCONFDIR}"

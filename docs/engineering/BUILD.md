@@ -42,6 +42,19 @@ sudo apt update && sudo apt install -y \
 
 *Note: Drogon and Drogon dependencies (Trantor) can be installed via system packages or pulled automatically via CMake `FetchContent`.*
 
+### 2.1 Production Shared Runtime Dependency Contract
+The compiled production executable (`nodepulse_server`) is dynamically linked against core shared libraries and does not embed developer-specific RPATHs or hardcoded search directories. Target runtime hosts must have the corresponding shared libraries available in standard dynamic linker locations (`/usr/lib`, `/usr/local/lib`, `/usr/lib64`, or registered via `/etc/ld.so.conf.d/` followed by `sudo ldconfig`):
+- `libdrogon.so.1` & `libtrantor.so.1`
+- `libjsoncpp.so.*`
+- `libspdlog.so.*` & `libfmt.so.*`
+- `libpq.so.5` (when PostgreSQL metric history is enabled)
+- `libc.so.6` & `libstdc++.so.6`
+
+Verify all dependencies resolve on the target system using:
+```bash
+ldd /path/to/nodepulse_server
+```
+
 ---
 
 ## 3. CMake Configuration Options

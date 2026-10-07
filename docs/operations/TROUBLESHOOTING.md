@@ -83,3 +83,23 @@ When experiencing issues with NodePulse:
   - Ensure client poll intervals are >= 1000ms.
   - Constrain process list queries using `?limit=20` rather than unbound process queries.
 
+---
+
+### 2.7 Service Fails to Start: Unresolved Shared Runtime Libraries
+- **Symptoms**: `nodepulse.service` fails immediately upon startup, `journalctl -u nodepulse` reports `error while loading shared libraries: <name>.so: cannot open shared object file: No such file or directory`, or `scripts/install.sh` aborts with `Error: Unresolved runtime shared library dependencies detected`.
+- **Cause**: The production binary was compiled with dynamic linking to core shared libraries (`libdrogon.so.1`, `libtrantor.so.1`, `libjsoncpp`, `libspdlog`, `libfmt`, `libpq.so.5`), but one or more of these libraries is missing from the target host or located in a directory not indexed by the dynamic linker.
+- **Resolution**:
+  1. Inspect the binary dependencies to identify the missing libraries:
+     ```bash
+     ldd /usr/local/bin/nodepulse_server
+     ```
+  2. Install the corresponding runtime packages via your distribution's package manager.
+  3. If libraries were installed from source into `/usr/local/lib` or another custom path, ensure that path is listed in a file under `/etc/ld.so.conf.d/` (e.g., `/etc/ld.so.conf.d/local.conf`) and refresh the dynamic linker cache:
+     ```bash
+     sudo ldconfig
+     ```
+  4. Re-verify with `ldd /usr/local/bin/nodepulse_server` that zero libraries report `=> not found`, then restart the service:
+     ```bash
+     sudo systemctl restart nodepulse
+     ```
+
