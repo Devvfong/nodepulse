@@ -5,6 +5,10 @@
 
 #include <nodepulse/config/config.hpp>
 
+namespace nodepulse::services {
+class HistoryService;
+}
+
 namespace nodepulse::server {
 
 class Server {
@@ -32,6 +36,7 @@ class Server {
   private:
     config::Config config_;
     static std::chrono::steady_clock::time_point start_time_;
+    std::shared_ptr<services::HistoryService> history_service_;
 };
 
 }  // namespace nodepulse::server

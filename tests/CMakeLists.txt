@@ -21,6 +21,8 @@ add_executable(tests_unit
     unit/docker_collector_test.cpp
     unit/stream_service_test.cpp
     unit/metrics_exporter_test.cpp
+    unit/postgres_repository_test.cpp
+    unit/history_service_test.cpp
 )
 
 target_link_libraries(tests_unit
@@ -90,5 +92,11 @@ else()
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(tests_unit)
-gtest_discover_tests(tests_integration)
+gtest_discover_tests(tests_unit
+    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=/home/devqii/.local/lib/x86_64-linux-gnu:/home/devqii/.local/lib"
+    DISCOVERY_MODE PRE_TEST
+)
+gtest_discover_tests(tests_integration
+    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=/home/devqii/.local/lib/x86_64-linux-gnu:/home/devqii/.local/lib"
+    DISCOVERY_MODE PRE_TEST
+)

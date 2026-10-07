@@ -19,9 +19,11 @@ add_library(nodepulse_lib STATIC
     controllers/process_controller.cpp
     controllers/service_controller.cpp
     controllers/system_controller.cpp
+    repositories/postgres_repository.cpp
     services/cpu_service.cpp
     services/disk_service.cpp
     services/docker_service.cpp
+    services/history_service.cpp
     services/memory_service.cpp
     services/metrics_exporter.cpp
     services/network_service.cpp
@@ -41,6 +43,8 @@ target_include_directories(nodepulse_lib
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+        /home/devqii/.local/include
+        /home/devqii/.local/include/postgresql
 )
 
 target_link_libraries(nodepulse_lib
@@ -48,6 +52,8 @@ target_link_libraries(nodepulse_lib
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Drogon::Drogon
+        /home/devqii/.local/lib/x86_64-linux-gnu/libpqxx.a
+        /home/devqii/.local/lib/x86_64-linux-gnu/libpq.so
         ${CMAKE_DL_LIBS}
 )
 

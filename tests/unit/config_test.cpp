@@ -170,4 +170,59 @@ TEST(ConfigTest, SseMaxClientsValidationRejectsZeroAndOversized) {
     EXPECT_FALSE(errors_huge.empty());
 }
 
+TEST(ConfigTest, PostgresDefaultsDisabledAndValid) {
+    Config cfg;
+    EXPECT_FALSE(cfg.postgres.enabled);
+    EXPECT_EQ(cfg.postgres.snapshot_interval_seconds, 60U);
+    EXPECT_FALSE(cfg.postgres.connection_string.empty());
+    EXPECT_TRUE(cfg.validate().empty());
+}
+
+TEST(ConfigTest, PostgresLoadsCustomJsonCorrectly) {
+    nlohmann::json j = {
+        {"postgres",
+         {{"enabled", true},
+          {"connection_string", "postgresql://custom_user:pass@127.0.0.1:5432/custom_db"},
+          {"snapshot_interval_seconds", 30}}}};
+
+    auto cfg = Config::load_from_json(j);
+    EXPECT_TRUE(cfg.postgres.enabled);
+    EXPECT_EQ(cfg.postgres.connection_string,
+              "postgresql://custom_user:pass@127.0.0.1:5432/custom_db");
+    EXPECT_EQ(cfg.postgres.snapshot_interval_seconds, 30U);
+    EXPECT_TRUE(cfg.validate().empty());
+}
+
+TEST(ConfigTest, PostgresEnvOverridesAppliedCorrectly) {
+    Config cfg;
+    setenv("NODEPULSE_POSTGRES_ENABLED", "true", 1);
+    setenv("NODEPULSE_POSTGRES_URL", "postgresql://env_user:env_pass@localhost:5432/env_db", 1);
+    setenv("NODEPULSE_POSTGRES_SNAPSHOT_INTERVAL", "45", 1);
+
+    cfg.apply_env_overrides();
+
+    EXPECT_TRUE(cfg.postgres.enabled);
+    EXPECT_EQ(cfg.postgres.connection_string,
+              "postgresql://env_user:env_pass@localhost:5432/env_db");
+    EXPECT_EQ(cfg.postgres.snapshot_interval_seconds, 45U);
+    EXPECT_TRUE(cfg.validate().empty());
+
+    unsetenv("NODEPULSE_POSTGRES_ENABLED");
+    unsetenv("NODEPULSE_POSTGRES_URL");
+    unsetenv("NODEPULSE_POSTGRES_SNAPSHOT_INTERVAL");
+}
+
+TEST(ConfigTest, PostgresValidationRejectsEmptyConnStringOrZeroInterval) {
+    Config cfg;
+    cfg.postgres.enabled = true;
+    cfg.postgres.connection_string = "";
+    auto errors = cfg.validate();
+    EXPECT_FALSE(errors.empty());
+
+    cfg.postgres.connection_string = "postgresql://localhost/db";
+    cfg.postgres.snapshot_interval_seconds = 0;
+    auto errors_interval = cfg.validate();
+    EXPECT_FALSE(errors_interval.empty());
+}
+
 }  // namespace nodepulse::config

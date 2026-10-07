@@ -85,6 +85,9 @@ NodePulse employs a hierarchical configuration model:
 | `NODEPULSE_DOCKER_SOCKET` | `collectors.docker.socket_path` | `/var/run/docker.sock` | Path to Docker Unix domain socket |
 | `NODEPULSE_SSE_MAX_CLIENTS` | `sse.max_clients` | `64` | Maximum concurrent active SSE subscriber connections |
 | `NODEPULSE_PROMETHEUS_AUTH` | `prometheus.require_auth` | `true` | Secure-by-default; set `false` to permit unauthenticated scrapes |
+| `NODEPULSE_POSTGRES_ENABLED` | `postgres.enabled` | `false` | Enable PostgreSQL metric history persistence |
+| `NODEPULSE_POSTGRES_URL` | `postgres.connection_string` | `postgresql://nodepulse:password@localhost:5432/nodepulse_db` | PostgreSQL connection URI or key-value string |
+| `NODEPULSE_POSTGRES_SNAPSHOT_INTERVAL` | `postgres.snapshot_interval_seconds` | `60` | Periodic snapshot interval in seconds |
 
 ---
 

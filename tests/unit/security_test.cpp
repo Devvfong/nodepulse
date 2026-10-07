@@ -64,4 +64,48 @@ TEST(SecurityTest, ConstantTimeEqualsOversizedCandidateDoesNotCrashOrLeak) {
     EXPECT_FALSE(constant_time_equals(expected, huge_candidate));
 }
 
+TEST(SecurityTest, RedactConnectionStringUriWithPassword) {
+    EXPECT_EQ(
+        redact_connection_string("postgresql://nodepulse:secret123@localhost:5432/nodepulse_db"),
+        "postgresql://nodepulse:***@localhost:5432/nodepulse_db");
+    EXPECT_EQ(redact_connection_string("postgres://user:p@ssw0rd@db.internal/mydb?sslmode=require"),
+              "postgres://user:***@db.internal/mydb?sslmode=require");
+}
+
+TEST(SecurityTest, RedactConnectionStringUriWithoutPassword) {
+    EXPECT_EQ(redact_connection_string("postgresql://nodepulse@localhost:5432/nodepulse_db"),
+              "postgresql://nodepulse@localhost:5432/nodepulse_db");
+    EXPECT_EQ(redact_connection_string("postgresql://localhost:5432/nodepulse_db"),
+              "postgresql://localhost:5432/nodepulse_db");
+}
+
+TEST(SecurityTest, RedactConnectionStringAlreadyRedacted) {
+    EXPECT_EQ(redact_connection_string("postgresql://nodepulse:***@localhost:5432/nodepulse_db"),
+              "postgresql://nodepulse:***@localhost:5432/nodepulse_db");
+    EXPECT_EQ(redact_connection_string("host=localhost password=*** dbname=db"),
+              "host=localhost password=*** dbname=db");
+}
+
+TEST(SecurityTest, RedactConnectionStringKeyValueFormats) {
+    EXPECT_EQ(redact_connection_string(
+                  "host=localhost port=5432 user=nodepulse password=secret123 dbname=np"),
+              "host=localhost port=5432 user=nodepulse password=*** dbname=np");
+    EXPECT_EQ(redact_connection_string("host=localhost password='quoted_secret' dbname=np"),
+              "host=localhost password=*** dbname=np");
+    EXPECT_EQ(redact_connection_string("host=localhost password=\"double_quoted\" dbname=np"),
+              "host=localhost password=*** dbname=np");
+    EXPECT_EQ(redact_connection_string("PASSWORD=UPPERCASE_SECRET host=localhost"),
+              "PASSWORD=*** host=localhost");
+}
+
+TEST(SecurityTest, RedactConnectionStringQueryParamFormat) {
+    EXPECT_EQ(
+        redact_connection_string("postgresql://host/db?user=app&password=secret&sslmode=disable"),
+        "postgresql://host/db?user=app&password=***&sslmode=disable");
+}
+
+TEST(SecurityTest, RedactConnectionStringEmpty) {
+    EXPECT_EQ(redact_connection_string(""), "");
+}
+
 }  // namespace nodepulse::utils

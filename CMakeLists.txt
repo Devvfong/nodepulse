@@ -53,8 +53,8 @@ find_package(nlohmann_json REQUIRED)
 find_package(Drogon REQUIRED)
 
 link_directories(
-    $ENV{HOME}/.local/lib/x86_64-linux-gnu
-    $ENV{HOME}/.local/lib
+    /home/devqii/.local/lib/x86_64-linux-gnu
+    /home/devqii/.local/lib
 )
 
 # Clang-Tidy Integration during compilation

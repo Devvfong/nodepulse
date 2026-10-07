@@ -22,6 +22,19 @@ else()
     )
 endif()
 
+target_link_directories(nodepulse_server
+    PRIVATE
+        /home/devqii/.local/lib/x86_64-linux-gnu
+        /home/devqii/.local/lib
+)
+target_link_options(nodepulse_server
+    PRIVATE
+        -L/home/devqii/.local/lib/x86_64-linux-gnu
+        -L/home/devqii/.local/lib
+        -Wl,-rpath-link,/home/devqii/.local/lib/x86_64-linux-gnu
+        -Wl,-rpath,/home/devqii/.local/lib/x86_64-linux-gnu
+)
+
 target_compile_features(nodepulse_server PRIVATE cxx_std_20)
 
 if(WARNINGS_AS_ERRORS)

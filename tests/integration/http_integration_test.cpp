@@ -33,10 +33,12 @@
 #include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/middleware/auth_filter.hpp>
 #include <nodepulse/middleware/rate_limit_filter.hpp>
+#include <nodepulse/repositories/postgres_repository.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
 #include <nodepulse/services/docker_service.hpp>
+#include <nodepulse/services/history_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/metrics_exporter.hpp>
 #include <nodepulse/services/network_service.hpp>

@@ -109,6 +109,25 @@ This document consolidates and indexes all foundational architectural, technical
   4. **Slot Lifecycle & Cleanup**: Slots are released immediately upon client disconnect, send failure, explicit removal, server shutdown, or connection setup rollback. Dead subscribers are automatically pruned upon subsequent admission attempts.
 - **Consequences**: Deterministic, bounded resource consumption for live telemetry streaming with strict isolation from request rate limiting.
 
-
-
-
+### DEC-017: PostgreSQL Metric History Persistence (Phase 14)
+- **Context**: Operational monitoring requires persistent archival of periodic host telemetry snapshots (CPU, load averages, memory, swap, network) into a PostgreSQL database using `libpqxx`.
+- **Pre-Approved Contract vs. Implementation Decisions**:
+  - **Pre-Approved Contract**:
+    - Internal persistence to PostgreSQL using `libpqxx` (`IPostgresRepository`, `PostgresRepository`).
+    - Database schema for `host_metrics` table with composite index `idx_host_metrics_hostname_time` (`docs/domain/DATA_MODEL.md:241-260`).
+    - Dedicated background persistence thread periodically inserting snapshots (`docs/architecture/DATA_FLOW.md:145-160`, `IMPLEMENTATION_PLAN.md:437-458`).
+    - Error resilience: safe handling of database downtime without crashing or degrading HTTP API (`BR-003`, `docs/architecture/DATA_FLOW.md:158-160`).
+    - Public historical query REST endpoints were **explicitly deferred** in `IMPLEMENTATION_PLAN.md:457`. No public `/api/v1/history` route is exposed.
+    - Automated retention cleanup was **not present** in pre-Phase-14 contracts. Retention configuration and automated cleanup are omitted.
+  - **Phase-14 Implementation Decisions**:
+    1. **Parameterized Queries**:
+       - Enforce parameterized SQL execution via `pqxx::params` and `tx.exec(sql, p)` across all queries, strictly eliminating SQL injection vulnerabilities.
+    2. **Decoupled Architecture & Nullable Metrics Preservation**:
+       - Background persistence loop runs in `HistoryService` on a dedicated thread, sampling existing cached metrics from `SystemService`, `CpuService`, `MemoryService`, and `NetworkService` without redundant `/proc` parsing or Drogon event loop interference.
+       - Preserves `std::nullopt` (SQL `NULL`) for `cpu_usage_percent`, `net_rx_bytes_per_sec`, and `net_tx_bytes_per_sec` when collectors are in warming up / initial baseline states (DEC-014), avoiding misleading 0.0 metrics.
+    3. **Resilience & Graceful Degradation**:
+       - PostgreSQL storage is strictly optional (`postgres.enabled`, default `false`). If disabled or if the PostgreSQL server is unreachable/offline, core host monitoring and all real-time endpoints remain 100% operational.
+       - Failed background sample writes are safely dropped with error logging; no unbounded memory queues are created.
+    4. **Security & Credential Redaction**:
+       - Connection strings (`postgres.connection_string`, `NODEPULSE_POSTGRES_URL`) containing secrets are strictly masked in all logs, internal state, and exceptions via `nodepulse::utils::redact_connection_string()`, handling both URI (`postgresql://user:pass@host/db`) and libpq key-value (`host=... password=...`) syntaxes.
+- **Consequences**: Scalable, secure historical telemetry persistence with zero impact on real-time event loop latency or core agent availability during database outages.

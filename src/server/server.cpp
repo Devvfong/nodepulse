@@ -17,10 +17,13 @@
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
+#include <nodepulse/controllers/system_controller.hpp>
 #include <nodepulse/middleware/auth_filter.hpp>
 #include <nodepulse/middleware/rate_limit_filter.hpp>
+#include <nodepulse/repositories/postgres_repository.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/docker_service.hpp>
+#include <nodepulse/services/history_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
 #include <nodepulse/services/metrics_exporter.hpp>
 #include <nodepulse/services/stream_service.hpp>
@@ -118,6 +121,17 @@ void Server::setup() {
     metrics_exporter->set_start_time(start_time_);
     controllers::MetricsController::set_metrics_exporter(metrics_exporter);
     controllers::MetricsController::set_config(config_.prometheus);
+
+    if (config_.postgres.enabled) {
+        auto pg_repo =
+            std::make_shared<repositories::PostgresRepository>(config_.postgres.connection_string);
+        history_service_ = std::make_shared<services::HistoryService>(
+            pg_repo, controllers::SystemController::get_system_service(),
+            controllers::CpuController::get_cpu_service(),
+            std::make_shared<services::MemoryService>(),
+            controllers::NetworkController::get_network_service(), config_.postgres);
+        history_service_->start();
+    }
 
     drogon::app().addListener(config_.server.host, config_.server.port);
     drogon::app().setThreadNum(config_.server.threads);
@@ -246,6 +260,10 @@ void Server::stop() {
     controllers::CpuController::get_cpu_service()->stop_sampling();
     controllers::NetworkController::get_network_service()->stop_sampling();
     controllers::ProcessController::get_process_service()->stop_sampling();
+    if (history_service_) {
+        history_service_->stop();
+        history_service_.reset();
+    }
     controllers::MetricsController::set_metrics_exporter(nullptr);
     middleware::AuthFilter::reset();
     middleware::RateLimitFilter::reset();

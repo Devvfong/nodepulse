@@ -237,6 +237,21 @@ void Config::apply_env_overrides() {
             sse.max_clients = 0;
         }
     }
+    if (auto pg_enabled = get_env_var("NODEPULSE_POSTGRES_ENABLED")) {
+        postgres.enabled = (*pg_enabled == "true" || *pg_enabled == "1");
+    }
+    if (auto pg_conn = get_env_var("NODEPULSE_POSTGRES_CONNECTION_STRING")) {
+        postgres.connection_string = *pg_conn;
+    } else if (auto pg_url = get_env_var("NODEPULSE_POSTGRES_URL")) {
+        postgres.connection_string = *pg_url;
+    }
+    if (auto pg_interval = get_env_var("NODEPULSE_POSTGRES_SNAPSHOT_INTERVAL")) {
+        try {
+            postgres.snapshot_interval_seconds = static_cast<uint32_t>(std::stoul(*pg_interval));
+        } catch (const std::exception&) {
+            postgres.snapshot_interval_seconds = 0;
+        }
+    }
 }
 
 Config Config::load(const std::optional<std::string>& file_override) {
@@ -333,6 +348,16 @@ std::vector<std::string> Config::validate() const {
         }
         if (collectors.docker.timeout_ms == 0) {
             errors.emplace_back("collectors.docker.timeout_ms must be greater than 0");
+        }
+    }
+
+    if (postgres.enabled) {
+        if (postgres.connection_string.empty()) {
+            errors.emplace_back(
+                "postgres.connection_string cannot be empty when postgres is enabled");
+        }
+        if (postgres.snapshot_interval_seconds == 0) {
+            errors.emplace_back("postgres.snapshot_interval_seconds must be greater than 0");
         }
     }
 

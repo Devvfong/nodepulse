@@ -34,4 +34,3 @@ class MetricsController : public drogon::HttpController<MetricsController> {
 };
 
 }  // namespace nodepulse::controllers
-
