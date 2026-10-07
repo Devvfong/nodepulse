@@ -3,12 +3,12 @@
 ## Project Metadata
 - **Project**: NodePulse
 - **Description**: Lightweight Linux server monitoring and management agent written in C++20 using Drogon
-- **Status**: Server-Sent Events (SSE) Live Metrics implemented and verified with asynchronous chunked streaming (`GET /api/v1/events`), `MetricPulse` domain aggregate, Drogon `HttpResponse::newAsyncStreamResponse`, non-blocking subscriber lifecycle management, explicit connection capacity bound (`sse.max_clients = 64`, DEC-016) with race-safe atomic admission control, HTTP 503 `SERVICE_UNAVAILABLE` standard error envelope on capacity exhaustion, strict `X-API-Key` auth and rate-limiting at connection handshake, CPU and network warm-up null preservation, periodic heartbeat comments (`: keepalive\n\n`), graceful shutdown, zero sensitive process/container data leakage, and 100% test pass rate across 251 tests
-- **Current Implementation Phase**: Phase 12 — SSE Live Metrics (`/api/v1/events` streaming channel)
-- **Next Approved Phase**: Phase 13 — Prometheus Exposition (`/metrics` scrape endpoint)
+- **Status**: Prometheus Exposition implemented and verified with `/metrics` scrape endpoint, standard Prometheus 0.0.4 text format (`text/plain; version=0.0.4; charset=utf-8`), full HELP and TYPE declarations, thread-safe asynchronous collector offload via `trantor::ConcurrentTaskQueue`, secure-by-default authentication (`prometheus.require_auth: true`), configurable unauthenticated scrape policy strictly scoped to `/metrics`, HTTP request and collector failure internal metric tracking with endpoint normalization eliminating dynamic label cardinality, warm-up gauge omission (no fake 0.0 or NaN), rate limiting preservation, disabled 503 `SERVICE_UNAVAILABLE` envelope, and 100% test pass rate across 272 tests
+- **Current Implementation Phase**: Phase 13 — Prometheus Exposition (`/metrics` scrape endpoint)
+- **Next Approved Phase**: Phase 14 — PostgreSQL Metric History (libpqxx repository & storage)
 - **Production Ready**: No
 - **Active Git Branch**: `master`
-- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, rate limit filter & token-bucket limiter, docker collector & endpoints, sse stream service & events endpoint with admission control, error responses, unit & integration tests)
+- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, rate limit filter & token-bucket limiter, docker collector & endpoints, sse stream service & events endpoint with admission control, metrics exporter & prometheus scrape controller, error responses, unit & integration tests)
 
 ---
 
@@ -29,8 +29,8 @@
 | **Phase 10** | Rate Limiting (Token-bucket / Leaky-bucket middleware) | **COMPLETED** | N/A |
 | **Phase 11** | Docker Integration (`/var/run/docker.sock` client) | **COMPLETED** | N/A |
 | **Phase 12** | SSE Live Metrics (`/api/v1/events` streaming channel) | **COMPLETED** | N/A |
-| **Phase 13** | Prometheus Exposition (`/metrics` scrape endpoint) | PENDING | **YES (Next Approved)** |
-| **Phase 14** | PostgreSQL Metric History (libpqxx repository & storage) | PENDING | NO |
+| **Phase 13** | Prometheus Exposition (`/metrics` scrape endpoint) | **COMPLETED** | N/A |
+| **Phase 14** | PostgreSQL Metric History (libpqxx repository & storage) | PENDING | **YES (Next Approved)** |
 | **Phase 15** | Operations (systemd unit, packaging, config validator) | PENDING | NO |
 | **Phase 16** | Production Readiness (Sanitizers, Benchmarks, Security Audit) | PENDING | NO |
 
@@ -81,6 +81,7 @@
   - `include/nodepulse/services/service_manager_service.hpp` & `src/services/service_manager_service.cpp`: Service layer coordinating service querying, state filtering (`active`, `inactive`, `failed`, `all`), limit capping, and async worker queue offloading
   - `include/nodepulse/services/docker_service.hpp` & `src/services/docker_service.cpp`: Service layer coordinating Docker container listing and detail inspection with thread-pool offloading (`trantor::ConcurrentTaskQueue`)
   - `include/nodepulse/services/stream_service.hpp` & `src/services/stream_service.cpp`: Service layer coordinating Server-Sent Events subscribers (`ISseClient`, `DrogonSseClient`), thread-safe client lifecycle management, dedicated broadcast sampling thread, immediate initial pulse emission on connect, periodic broadcast (`interval_ms`), keepalive heartbeat comment generation (`: keepalive\n\n`), dead client detection and removal, and graceful shutdown
+  - `include/nodepulse/services/metrics_exporter.hpp` & `src/services/metrics_exporter.cpp`: Service layer coordinating Prometheus 0.0.4 text exposition formatting across CPU, memory, disk, network, SSE, process self stats, and internal HTTP request / collector failure counters, with thread-safe async offloading via `trantor::ConcurrentTaskQueue`
   - `include/nodepulse/controllers/system_controller.hpp` & `src/controllers/system_controller.cpp`: Drogon controller exposing `GET /api/v1/system`
   - `include/nodepulse/controllers/cpu_controller.hpp` & `src/controllers/cpu_controller.cpp`: Drogon controller exposing `GET /api/v1/cpu`
   - `include/nodepulse/controllers/memory_controller.hpp` & `src/controllers/memory_controller.cpp`: Drogon controller exposing `GET /api/v1/memory`
@@ -90,11 +91,12 @@
   - `include/nodepulse/controllers/service_controller.hpp` & `src/controllers/service_controller.cpp`: Drogon controller exposing `GET /api/v1/services` and `GET /api/v1/services/{name}` with async worker offloading, unit name regex validation, and error handling
   - `include/nodepulse/controllers/docker_controller.hpp` & `src/controllers/docker_controller.cpp`: Drogon controller exposing `GET /api/v1/containers` and `GET /api/v1/containers/{id}` with async worker offloading, container ID validation, and error mappings (400, 404, 503, 500)
   - `include/nodepulse/controllers/events_controller.hpp` & `src/controllers/events_controller.cpp`: Drogon controller exposing `GET /api/v1/events` using `HttpResponse::newAsyncStreamResponse` with `disableKickoffTimeout=true`, required SSE streaming headers (`text/event-stream; charset=utf-8`, `no-cache`, `keep-alive`, `X-Request-ID`), and 503 `SERVICE_UNAVAILABLE` when disabled by configuration
+  - `include/nodepulse/controllers/metrics_controller.hpp` & `src/controllers/metrics_controller.cpp`: Drogon controller exposing `GET /metrics` returning `text/plain; version=0.0.4; charset=utf-8` with asynchronous offloading and 503 `SERVICE_UNAVAILABLE` standard error envelope when `prometheus.enabled` is false
   - `include/nodepulse/config/config.hpp` & `src/config/config.cpp`: Configuration domain structs, JSON loader, environment overrides, schema validation, and Docker socket path validation
   - `include/nodepulse/utils/error_response.hpp` & `src/utils/error_response.cpp`: Standard JSON error envelope generator and error code taxonomy
   - `include/nodepulse/utils/logger.hpp` & `src/utils/logger.cpp`: Logger abstraction wrapping spdlog with custom and structured JSON patterns
   - `include/nodepulse/controllers/health_controller.hpp` & `src/controllers/health_controller.cpp`: Drogon controller for `GET /api/v1/health`
-  - `include/nodepulse/server/server.hpp` & `src/server/server.cpp`: Drogon server lifecycle manager, loopback-only network binding enforcement, empty API key startup rejection, validated Request ID injector, access logger, post-routing auth advice registration, background CPU, Network, and Process sampling lifecycle orchestration, and centralized 404/exception handlers
+  - `include/nodepulse/server/server.hpp` & `src/server/server.cpp`: Drogon server lifecycle manager, loopback-only network binding enforcement, empty API key startup rejection, validated Request ID injector, access logger, post-routing auth advice registration, Prometheus exporter orchestration, HTTP request metrics recording, background CPU, Network, and Process sampling lifecycle orchestration, and centralized 404/exception handlers
   - `apps/server/main.cpp`: Application entry point with CLI parsing (`--config`, `--validate-config`, `--version`, `--help`) and empty API key startup validation
 - **Test Fixtures**:
   - `tests/fixtures/proc/uptime`: Sample `/proc/uptime`
@@ -142,49 +144,46 @@
   - `tests/unit/rate_limit_filter_test.cpp`: Requests below limit, exact boundary behavior, immediate 429 rejection on burst exhaustion, window recovery, full refill capacity restoration, independent client IP isolation, stale entry cleanup, reset clearing, concurrent thread safety (16 threads), disabled filter pass-through, HTTP 429 envelope format, and simulated clock time advance recovery (12 tests)
   - `tests/unit/docker_collector_test.cpp`: Container ID validation, ISO 8601 UTC timestamp parser, CPU/memory metric calculations with zero-guards, mock transport container list and detail parsing, transport error status mappings, response payload size limits, socket transport with real Unix socket pairs, and chunked transfer encoding decoding (17 tests)
   - `tests/unit/stream_service_test.cpp`: MetricPulse JSON serialization preserving nulls during warm-up and with valid metrics, SSE frame formatting (`id`, `event`, `data\n\n`), keepalive comment formatting (`: keepalive\n\n`), initial pulse delivery on client connect, multi-client broadcasting, dead subscriber detection on send failure and prompt removal, periodic heartbeat broadcasting, explicit client removal and shutdown cleanup, disabled SSE configuration rejection, live collector pulse population, concurrent subscriber lifecycle thread safety, explicit max client capacity admission rejection, high-concurrency race-safe admission invariant validation, slot release on disconnect, dead client pruning capacity recovery, shutdown capacity clearance, and RAII reservation rollback (19 tests)
-  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe exemption, authenticated access across all 12 operational routes (including Docker and SSE endpoints), missing API key rejection (401), invalid API key rejection (401), empty and oversized key header rejection (401), case-insensitive header lookup (`x-api-key`), unknown route 404 preservation (including routes resembling /health), concurrent authenticated and unauthenticated queries, server startup empty key rejection, rate limit requests below limit, burst exhaustion returning HTTP 429 with `Retry-After` and standard JSON envelope, health endpoint rate-limiting policy compliance, auth evaluation prior to rate limiting, simulated time recovery, disabled rate limiting pass-through, Docker endpoints 503 on missing daemon, invalid container ID rejection (400), Docker endpoints 200 OK with mock service, concurrent Docker requests, SSE endpoint returning 200 with `text/event-stream; charset=utf-8` and valid pulse frames, SSE rate limit 429 on quota exhaustion, SSE concurrent streaming clients with clean disconnect, concurrent REST responsiveness during active SSE streaming, disabled SSE returning 503, and SSE connection capacity exhaustion returning 503 `SERVICE_UNAVAILABLE` with standard JSON envelope and single Content-Type header (52 integration tests)
+  - `tests/unit/metrics_exporter_test.cpp`: Exporter enabled/disabled check, null collector fallback, CPU warm-up gauge omission, memory metrics export, disk filesystem/mount labels with escaping, label escaping special chars, network interface labels, process self stats provider, SSE active connections count, HTTP request counter endpoint normalization eliminating dynamic cardinality, collector failure counters, duplicate type declaration prevention, concurrent scraping and recording thread safety, and async export equivalence (14 tests)
+  - `tests/integration/http_integration_test.cpp`: In-process Drogon HTTP tests verifying health probe exemption, authenticated access across all operational routes (including Docker, SSE, and Prometheus endpoints), missing API key rejection (401), invalid API key rejection (401), empty and oversized key header rejection (401), case-insensitive header lookup (`x-api-key`), unknown route 404 preservation (including routes resembling /health), concurrent authenticated and unauthenticated queries, server startup empty key rejection, rate limit requests below limit, burst exhaustion returning HTTP 429 with `Retry-After` and standard JSON envelope, health endpoint rate-limiting policy compliance, auth evaluation prior to rate limiting, simulated time recovery, disabled rate limiting pass-through, Docker endpoints 503 on missing daemon, invalid container ID rejection (400), Docker endpoints 200 OK with mock service, concurrent Docker requests, SSE endpoint returning 200 with `text/event-stream; charset=utf-8` and valid pulse frames, SSE rate limit 429 on quota exhaustion, SSE concurrent streaming clients with clean disconnect, concurrent REST responsiveness during active SSE streaming, disabled SSE returning 503, SSE connection capacity exhaustion returning 503 `SERVICE_UNAVAILABLE` with standard JSON envelope and single Content-Type header, Prometheus endpoint returning 200 OK with `text/plain; version=0.0.4; charset=utf-8` and valid metric body under valid API key, Prometheus endpoint rejecting missing API key (401), Prometheus endpoint rejecting invalid API key (401), unauthenticated Prometheus scraping when `prometheus.require_auth: false` while operational endpoints still require authentication (401), disabled Prometheus returning 503 `SERVICE_UNAVAILABLE` with standard JSON envelope, Prometheus rate limit 429 on quota exhaustion, and internal HTTP request counter recording across scrapes (59 integration tests)
 
 ---
 
-## Phase 12 Verification and Gate Status
+## Phase 13 Verification and Gate Status
 - **Exit Gate Criteria**:
-  - [x] Strongly typed C++20 domain model implemented (`MetricPulse`) strictly adhering to pre-Phase-12 schemas in `docs/domain/DATA_MODEL.md` and `docs/api/API.md`.
-  - [x] Standard Server-Sent Events framing implemented (`id: <seq>\nevent: metric_pulse\ndata: <json>\n\n`) with single-line JSON data payloads.
-  - [x] Periodic keepalive heartbeats implemented (`: keepalive\n\n`) preventing intermediate proxy or firewall socket timeouts.
-  - [x] Warm-up and reset semantics strictly preserved: `cpu_usage_percent`, `network_rx_bytes_sec`, and `network_tx_bytes_sec` serialize to `null` (not fabricated 0.0) during initial measurement or counter reset.
-  - [x] Non-blocking asynchronous streaming implemented using Drogon `HttpResponse::newAsyncStreamResponse` with `disableKickoffTimeout=true` and chunked transfer encoding.
-  - [x] Zero dedicated thread pinning per client: broadcast sampling runs on a single configurable background thread (`interval_ms`), pushing snapshots across non-blocking client sinks.
-  - [x] Immediate telemetry delivery: newly connected subscribers receive an instantaneous `metric_pulse` frame upon connection establishment.
-  - [x] Dead/slow client detection: disconnects or socket write failures promptly mark subscribers as dead and prune them from the active subscriber set without blocking other subscribers.
-  - [x] Authentication (`X-API-Key`) enforced via `AuthFilter` prior to SSE connection handshake (no API keys in URL query parameters).
-  - [x] Rate limiting evaluated at connection establishment via `RateLimitFilter` (returning 429 `RATE_LIMITED` upon quota exhaustion; events streamed over established connection are not rate-limited).
-  - [x] Explicit application-level connection capacity limit enforced (`sse.max_clients = 64`, DEC-016) with atomic two-phase admission control (`try_reserve_slot()`, `SseSlotReservation`).
-  - [x] Exhausted capacity returns HTTP 503 `SERVICE_UNAVAILABLE` before establishing the stream, emitting the standard NodePulse error envelope with single `application/json` Content-Type and `X-Request-ID` (separate from 429 request rate limits).
-  - [x] Required response headers emitted: `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache`, `Connection: keep-alive`, and `X-Request-ID`.
-  - [x] Disabled SSE support: returns 503 `SERVICE_UNAVAILABLE` with standard JSON error envelope when `sse.enabled` is false.
-  - [x] Zero sensitive data exposure: no process command lines, working directories, or Docker container mount paths emitted in live streams.
-  - [x] 100% test pass rate across unit and integration test suites (251/251 passed).
+  - [x] Standard Prometheus 0.0.4 text format implemented and exposed at `GET /metrics`.
+  - [x] Content-Type header emitted strictly as `text/plain; version=0.0.4; charset=utf-8` on successful scrapes.
+  - [x] Full HELP and TYPE comment lines generated exactly once per metric family before any samples.
+  - [x] Metric names strictly follow pre-Phase-13 specifications (`nodepulse_cpu_usage_ratio`, `nodepulse_memory_used_bytes`, `nodepulse_memory_total_bytes`, `nodepulse_disk_used_bytes`, `nodepulse_disk_total_bytes`, `nodepulse_network_receive_bytes_total`, `nodepulse_network_transmit_bytes_total`, `nodepulse_build_info`, `nodepulse_process_uptime_seconds`, `nodepulse_process_resident_memory_bytes`, `nodepulse_process_cpu_seconds_total`, `nodepulse_http_requests_total`, `nodepulse_collector_failures_total`, `nodepulse_sse_active_connections`).
+  - [x] Warm-up omission preserved: `nodepulse_cpu_usage_ratio` is completely omitted from output while the CPU collector is warming up (no fabricated 0.0, no NaN, no null).
+  - [x] Zero sensitive data exposure: no process command lines, no process environment variables, no working directories, no Docker container mount paths, no request IDs in labels, no client IPs in labels, and no API keys.
+  - [x] Cardinality strictly bounded: no per-process, per-service, or per-container metrics emitted; endpoint label in `nodepulse_http_requests_total` is normalized to static route templates (e.g. `/api/v1/processes/{pid}`) preventing unbounded label growth.
+  - [x] Secure-by-default authentication: requires `X-API-Key` unless `prometheus.require_auth: false` is explicitly configured.
+  - [x] Unauthenticated scraping isolation: when `prometheus.require_auth: false` is configured, only `/metrics` is exempted; all operational endpoints (`/api/v1/system`, `/api/v1/cpu`, etc.) strictly continue to require `X-API-Key` (401).
+  - [x] Rate limiting preserved: requests to `/metrics` traverse the filter chain (`AuthFilter -> RateLimitFilter -> MetricsController`), returning HTTP 429 `RATE_LIMITED` with standard JSON error envelope and `Retry-After` header when burst capacity is exceeded.
+  - [x] Disabled Prometheus behavior: returns HTTP 503 `SERVICE_UNAVAILABLE` with standard JSON error envelope when `prometheus.enabled: false`.
+  - [x] Non-blocking execution: metric collection and serialization offloaded asynchronously via `trantor::ConcurrentTaskQueue` to avoid starving Drogon event loop threads.
+  - [x] 100% test pass rate across unit and integration test suites (272/272 passed).
   - [x] Zero compiler warnings or errors under `-Wall -Wextra -Wpedantic -Werror`.
   - [x] `format-check` passes with zero violations.
-  - [x] `tidy` passes with zero warnings or errors across all 35 source files.
-  - [x] Live HTTP smoke test verified with `curl` for unauthenticated rejection (401), invalid key rejection (401), authenticated live event streaming (200), concurrent REST responsiveness during streaming, and 2-client capacity exhaustion (503 `SERVICE_UNAVAILABLE` on 3rd client, recovery on disconnect).
+  - [x] `tidy` passes with zero warnings or errors across all 37 source files.
+  - [x] Live HTTP smoke test verified with `curl` for unauthenticated rejection (401), invalid key rejection (401), authenticated scraping (200 OK `text/plain; version=0.0.4; charset=utf-8`), and valid sample exposition.
 - **Verification Commands Executed**:
   ```bash
-  cmake --build build -- -j
+  cmake --build build -- -j$(nproc)
   ctest --test-dir build --output-on-failure
   cmake --build build --target format-check
   cmake --build build --target tidy
-  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_cap_smoke.json &
-  curl -N -s -H "X-API-Key: ..." http://127.0.0.1:18099/api/v1/events # Stream 1 (200 OK)
-  curl -N -s -H "X-API-Key: ..." http://127.0.0.1:18099/api/v1/events # Stream 2 (200 OK)
-  curl -s -i -H "X-API-Key: ..." http://127.0.0.1:18099/api/v1/events # Stream 3 -> 503 Service Unavailable
-  kill $PID1 # Disconnect Stream 1
-  curl -N -s -H "X-API-Key: ..." http://127.0.0.1:18099/api/v1/events # Stream 4 -> 200 OK text/event-stream
+  ./build/apps/server/nodepulse_server -c /tmp/nodepulse_test_cfg.json &
+  curl -i http://127.0.0.1:19090/metrics # -> 401 Unauthorized
+  curl -i -H "X-API-Key: invalid" http://127.0.0.1:19090/metrics # -> 401 Unauthorized
+  curl -i -H "X-API-Key: test_secret_key_123" http://127.0.0.1:19090/metrics # -> 200 OK text/plain; version=0.0.4; charset=utf-8
   ```
 - **Verification Results**:
   - Build: Succeeded cleanly (all targets built under `-Wall -Wextra -Wpedantic -Werror`).
-  - Tests: 251/251 passed (100% pass rate: 199 unit tests, 52 integration tests).
+  - Tests: 272/272 passed (100% pass rate: 213 unit tests, 59 integration tests).
   - Format check: Succeeded (0 violations).
-  - Static analysis: Succeeded (0 errors, 0 warnings across all 35 source files).
-  - Live HTTP capacity smoke test: Verified 2 streams accepted at capacity, 3rd stream rejected with HTTP 503 `SERVICE_UNAVAILABLE` standard error envelope, disconnect of stream 1 immediately unblocks new connection.
-- **Confirmation**: Phase 13 (Prometheus Exposition) has NOT been started.
+  - Static analysis: Succeeded (0 errors, 0 warnings across all 37 source files).
+  - Live HTTP smoke test: Verified 401 on unauthenticated, 401 on invalid key, 200 on authenticated with exact Prometheus 0.0.4 format and single `Content-Type: text/plain; version=0.0.4; charset=utf-8`.
+- **Confirmation**: Phase 14 (PostgreSQL Metric History) has NOT been started.
+

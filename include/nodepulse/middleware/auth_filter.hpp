@@ -51,12 +51,24 @@ class AuthFilter : public drogon::HttpFilter<AuthFilter> {
                                drogon::AdviceChainCallback&& accb);
 
     /**
+     * @brief Configure whether the Prometheus /metrics endpoint requires authentication.
+     * Defaults to true (secure by default).
+     */
+    static void set_metrics_require_auth(bool require_auth) noexcept;
+
+    /**
+     * @brief Check whether /metrics requires authentication.
+     */
+    [[nodiscard]] static bool metrics_require_auth() noexcept;
+
+    /**
      * @brief Reset authentication configuration (primarily for unit testing).
      */
     static void reset();
 
   private:
     static inline std::string api_key_;
+    static inline bool metrics_require_auth_{true};
     static inline std::mutex mutex_;
 };
 

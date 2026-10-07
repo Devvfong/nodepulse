@@ -19,6 +19,17 @@ void AuthFilter::set_api_key(std::string key) {
 void AuthFilter::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
     api_key_.clear();
+    metrics_require_auth_ = true;
+}
+
+void AuthFilter::set_metrics_require_auth(bool require_auth) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    metrics_require_auth_ = require_auth;
+}
+
+bool AuthFilter::metrics_require_auth() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return metrics_require_auth_;
 }
 
 bool AuthFilter::is_exempt_path(std::string_view path) noexcept {
@@ -27,6 +38,15 @@ bool AuthFilter::is_exempt_path(std::string_view path) noexcept {
     }
     if (path.starts_with("/api/v1/health?")) {
         return true;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!metrics_require_auth_) {
+        if (path == "/metrics" || path == "/metrics/") {
+            return true;
+        }
+        if (path.starts_with("/metrics?")) {
+            return true;
+        }
     }
     return false;
 }

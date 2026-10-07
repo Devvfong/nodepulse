@@ -13,6 +13,7 @@
 #include <nodepulse/controllers/docker_controller.hpp>
 #include <nodepulse/controllers/events_controller.hpp>
 #include <nodepulse/controllers/health_controller.hpp>
+#include <nodepulse/controllers/metrics_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
@@ -21,6 +22,7 @@
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/docker_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
+#include <nodepulse/services/metrics_exporter.hpp>
 #include <nodepulse/services/stream_service.hpp>
 #include <nodepulse/utils/error_response.hpp>
 #include <nodepulse/utils/logger.hpp>
@@ -65,6 +67,7 @@ void Server::setup() {
             "Set it in config or via NODEPULSE_API_KEY environment variable.");
     }
     middleware::AuthFilter::set_api_key(config_.security.api_key);
+    middleware::AuthFilter::set_metrics_require_auth(config_.prometheus.require_auth);
     middleware::RateLimitFilter::init(config_.rate_limiting);
 
     start_time_ = std::chrono::steady_clock::now();
@@ -108,6 +111,14 @@ void Server::setup() {
         stream_service->start_streaming(std::chrono::milliseconds(config_.sse.interval_ms));
     }
 
+    auto metrics_exporter = std::make_shared<services::MetricsExporter>(
+        controllers::CpuController::get_cpu_service(), std::make_shared<services::MemoryService>(),
+        controllers::DiskController::get_disk_service(),
+        controllers::NetworkController::get_network_service(), stream_service, config_.prometheus);
+    metrics_exporter->set_start_time(start_time_);
+    controllers::MetricsController::set_metrics_exporter(metrics_exporter);
+    controllers::MetricsController::set_config(config_.prometheus);
+
     drogon::app().addListener(config_.server.host, config_.server.port);
     drogon::app().setThreadNum(config_.server.threads);
 
@@ -144,6 +155,13 @@ void Server::setup() {
         }
         if (!req_id.empty() && resp) {
             resp->addHeader("X-Request-ID", req_id);
+        }
+
+        if (req && resp) {
+            if (auto exp = controllers::MetricsController::get_metrics_exporter()) {
+                exp->record_http_request(req->path(), req->methodString(),
+                                         static_cast<int>(resp->statusCode()));
+            }
         }
 
         if (req && resp && req->getAttributes()) {
@@ -228,6 +246,8 @@ void Server::stop() {
     controllers::CpuController::get_cpu_service()->stop_sampling();
     controllers::NetworkController::get_network_service()->stop_sampling();
     controllers::ProcessController::get_process_service()->stop_sampling();
+    controllers::MetricsController::set_metrics_exporter(nullptr);
+    middleware::AuthFilter::reset();
     middleware::RateLimitFilter::reset();
     drogon::app().quit();
 }

@@ -26,16 +26,19 @@
 #include <nodepulse/controllers/docker_controller.hpp>
 #include <nodepulse/controllers/events_controller.hpp>
 #include <nodepulse/controllers/memory_controller.hpp>
+#include <nodepulse/controllers/metrics_controller.hpp>
 #include <nodepulse/controllers/network_controller.hpp>
 #include <nodepulse/controllers/process_controller.hpp>
 #include <nodepulse/controllers/service_controller.hpp>
 #include <nodepulse/controllers/system_controller.hpp>
+#include <nodepulse/middleware/auth_filter.hpp>
 #include <nodepulse/middleware/rate_limit_filter.hpp>
 #include <nodepulse/server/server.hpp>
 #include <nodepulse/services/cpu_service.hpp>
 #include <nodepulse/services/disk_service.hpp>
 #include <nodepulse/services/docker_service.hpp>
 #include <nodepulse/services/memory_service.hpp>
+#include <nodepulse/services/metrics_exporter.hpp>
 #include <nodepulse/services/network_service.hpp>
 #include <nodepulse/services/process_service.hpp>
 #include <nodepulse/services/service_manager_service.hpp>
@@ -245,6 +248,11 @@ class HttpIntegrationTest : public ::testing::Test {
         default_cfg.requests_per_minute = 60000;
         nodepulse::middleware::RateLimitFilter::init(default_cfg);
         nodepulse::middleware::RateLimitFilter::set_enabled(true);
+        nodepulse::middleware::AuthFilter::set_metrics_require_auth(true);
+        nodepulse::config::PrometheusConfig default_prom;
+        default_prom.enabled = true;
+        default_prom.require_auth = true;
+        nodepulse::controllers::MetricsController::set_config(default_prom);
     }
 };
 
@@ -2124,6 +2132,170 @@ TEST_F(HttpIntegrationTest,
     EXPECT_EQ(j["error"]["message"], "SSE connection capacity is currently exhausted.");
 
     nodepulse::controllers::EventsController::set_stream_service(original_service);
+}
+
+// =============================================================================
+// Prometheus Exposition Integration Tests (Phase 13)
+// =============================================================================
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointReturns200WithTextFormatAndValidApiKey) {
+    std::unordered_map<std::string, std::string> custom_hdr = {
+        {"X-API-Key", kValidApiKey}, {"X-Request-ID", "metrics-test-req-001"}};
+    auto resp = send_http_get(kTestHost, kTestPort, "/metrics", custom_hdr);
+
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_EQ(resp.get_header("content-type"), "text/plain; version=0.0.4; charset=utf-8");
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+    EXPECT_EQ(resp.get_header("x-request-id"), "metrics-test-req-001");
+
+    ASSERT_FALSE(resp.body.empty());
+    EXPECT_EQ(resp.body.back(), '\n');
+
+    // Verify presence of required metric families and TYPE declarations
+    EXPECT_NE(resp.body.find("# HELP nodepulse_build_info"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_build_info gauge\n"), std::string::npos);
+    EXPECT_NE(resp.body.find("nodepulse_build_info{"), std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_memory_used_bytes"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_memory_used_bytes gauge\n"), std::string::npos);
+    EXPECT_NE(resp.body.find("nodepulse_memory_used_bytes "), std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_memory_total_bytes"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_memory_total_bytes gauge\n"), std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_process_uptime_seconds"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_process_uptime_seconds counter\n"),
+              std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_process_resident_memory_bytes"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_process_resident_memory_bytes gauge\n"),
+              std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_http_requests_total"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_http_requests_total counter\n"), std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_collector_failures_total"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_collector_failures_total counter\n"),
+              std::string::npos);
+
+    EXPECT_NE(resp.body.find("# HELP nodepulse_sse_active_connections"), std::string::npos);
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_sse_active_connections gauge\n"), std::string::npos);
+}
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointRejectsMissingApiKeyByDefault) {
+    auto resp = send_http_get(kTestHost, kTestPort, "/metrics");
+
+    EXPECT_EQ(resp.status_code, 401);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["error"]["code"], "UNAUTHORIZED");
+}
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointRejectsInvalidApiKeyByDefault) {
+    auto resp =
+        send_http_get(kTestHost, kTestPort, "/metrics", {{"X-API-Key", "invalid_metrics_key"}});
+
+    EXPECT_EQ(resp.status_code, 401);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["error"]["code"], "UNAUTHORIZED");
+}
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointAllowsUnauthenticatedWhenConfigured) {
+    nodepulse::middleware::AuthFilter::set_metrics_require_auth(false);
+
+    // /metrics succeeds without X-API-Key
+    auto resp = send_http_get(kTestHost, kTestPort, "/metrics");
+    EXPECT_EQ(resp.status_code, 200);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_EQ(resp.get_header("content-type"), "text/plain; version=0.0.4; charset=utf-8");
+    EXPECT_NE(resp.body.find("# TYPE nodepulse_build_info gauge"), std::string::npos);
+
+    // Crucial check: operational endpoints MUST STILL reject missing API key with 401!
+    auto resp_cpu = send_http_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp_cpu.status_code, 401);
+
+    auto resp_sys = send_http_get(kTestHost, kTestPort, "/api/v1/system");
+    EXPECT_EQ(resp_sys.status_code, 401);
+
+    // And /api/v1/health remains accessible with 200
+    auto resp_health = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp_health.status_code, 200);
+
+    nodepulse::middleware::AuthFilter::set_metrics_require_auth(true);
+}
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointDisabledReturns503WithStandardEnvelope) {
+    auto orig_cfg = nodepulse::controllers::MetricsController::get_config();
+    auto disabled_cfg = orig_cfg;
+    disabled_cfg.enabled = false;
+    nodepulse::controllers::MetricsController::set_config(disabled_cfg);
+
+    auto resp = send_http_get(kTestHost, kTestPort, "/metrics", {{"X-API-Key", kValidApiKey}});
+
+    EXPECT_EQ(resp.status_code, 503);
+    EXPECT_EQ(resp.count_header("content-type"), 1U);
+    EXPECT_NE(resp.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp.has_header("x-request-id"));
+
+    auto j = nlohmann::json::parse(resp.body);
+    EXPECT_EQ(j["error"]["code"], "SERVICE_UNAVAILABLE");
+    EXPECT_EQ(j["error"]["message"], "Prometheus metrics exposition is disabled by configuration.");
+
+    nodepulse::controllers::MetricsController::set_config(orig_cfg);
+}
+
+TEST_F(HttpIntegrationTest, PrometheusEndpointRateLimitExceededReturns429WithRetryAfter) {
+    nodepulse::config::RateLimitConfig rl_cfg;
+    rl_cfg.enabled = true;
+    rl_cfg.burst_capacity = 2;
+    rl_cfg.requests_per_minute = 60;
+    nodepulse::middleware::RateLimitFilter::init(rl_cfg);
+
+    // 2 requests within burst capacity succeed
+    auto resp1 = send_http_get(kTestHost, kTestPort, "/metrics", {{"X-API-Key", kValidApiKey}});
+    EXPECT_EQ(resp1.status_code, 200);
+
+    auto resp2 = send_http_get(kTestHost, kTestPort, "/metrics", {{"X-API-Key", kValidApiKey}});
+    EXPECT_EQ(resp2.status_code, 200);
+
+    // 3rd request exceeds burst capacity -> 429 RATE_LIMITED
+    auto resp3 = send_http_get(kTestHost, kTestPort, "/metrics", {{"X-API-Key", kValidApiKey}});
+    EXPECT_EQ(resp3.status_code, 429);
+    EXPECT_EQ(resp3.count_header("content-type"), 1U);
+    EXPECT_NE(resp3.get_header("content-type").find("application/json"), std::string::npos);
+    EXPECT_TRUE(resp3.has_header("retry-after"));
+    EXPECT_FALSE(resp3.get_header("retry-after").empty());
+
+    auto j = nlohmann::json::parse(resp3.body);
+    EXPECT_EQ(j["error"]["code"], "RATE_LIMITED");
+}
+
+TEST_F(HttpIntegrationTest, PrometheusExpositionRecordsHttpMetrics) {
+    // Perform calls to various endpoints
+    auto resp_health = send_http_get(kTestHost, kTestPort, "/api/v1/health");
+    EXPECT_EQ(resp_health.status_code, 200);
+
+    auto resp_cpu = send_auth_get(kTestHost, kTestPort, "/api/v1/cpu");
+    EXPECT_EQ(resp_cpu.status_code, 200);
+
+    // Now scrape /metrics
+    auto resp_metrics = send_auth_get(kTestHost, kTestPort, "/metrics");
+    EXPECT_EQ(resp_metrics.status_code, 200);
+
+    EXPECT_NE(resp_metrics.body.find("nodepulse_http_requests_total{endpoint=\"/api/v1/"
+                                     "health\",method=\"GET\",status=\"200\"}"),
+              std::string::npos);
+    EXPECT_NE(resp_metrics.body.find("nodepulse_http_requests_total{endpoint=\"/api/v1/"
+                                     "cpu\",method=\"GET\",status=\"200\"}"),
+              std::string::npos);
 }
 
 TEST(ServerSecurityTest, RejectsNonLoopbackHostBinding) {

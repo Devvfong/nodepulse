@@ -20,6 +20,7 @@ add_executable(tests_unit
     unit/rate_limit_filter_test.cpp
     unit/docker_collector_test.cpp
     unit/stream_service_test.cpp
+    unit/metrics_exporter_test.cpp
 )
 
 target_link_libraries(tests_unit

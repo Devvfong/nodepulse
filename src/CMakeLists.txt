@@ -14,6 +14,7 @@ add_library(nodepulse_lib STATIC
     controllers/events_controller.cpp
     controllers/health_controller.cpp
     controllers/memory_controller.cpp
+    controllers/metrics_controller.cpp
     controllers/network_controller.cpp
     controllers/process_controller.cpp
     controllers/service_controller.cpp
@@ -22,6 +23,7 @@ add_library(nodepulse_lib STATIC
     services/disk_service.cpp
     services/docker_service.cpp
     services/memory_service.cpp
+    services/metrics_exporter.cpp
     services/network_service.cpp
     services/process_service.cpp
     services/service_manager_service.cpp
