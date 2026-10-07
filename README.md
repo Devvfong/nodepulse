@@ -95,3 +95,4 @@ NodePulse strictly separates responsibilities into decoupled layers:
 - **Engineering & Build**: [docs/engineering/BUILD.md](file:///home/devqii/workspace/nodepulse/docs/engineering/BUILD.md)
 - **Operations & Systemd**: [docs/operations/DEPLOYMENT.md](file:///home/devqii/workspace/nodepulse/docs/operations/DEPLOYMENT.md) & [docs/operations/SYSTEMD.md](file:///home/devqii/workspace/nodepulse/docs/operations/SYSTEMD.md)
 
+# nodepulse
