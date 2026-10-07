@@ -51,3 +51,30 @@ core.*
 config/config.json
 !config/config.example.json
 
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Generated packages / release archives
+*.tar.gz
+*.tgz
+*.zip
+*.deb
+*.rpm
