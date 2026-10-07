@@ -50,6 +50,7 @@ jobs:
             libpq-dev \
             libpqxx-dev \
             libsqlite3-dev \
+            libbrotli-dev \
             ${{ matrix.compiler.cc }} \
             ${{ matrix.compiler.cxx }}
 
@@ -100,6 +101,7 @@ jobs:
             libpq-dev \
             libpqxx-dev \
             libsqlite3-dev \
+            libbrotli-dev \
             clang-format-18 \
             clang-tidy-18
 
