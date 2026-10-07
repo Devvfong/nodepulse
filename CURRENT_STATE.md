@@ -3,12 +3,12 @@
 ## Project Metadata
 - **Project**: NodePulse
 - **Description**: Lightweight Linux server monitoring and management agent written in C++20 using Drogon
-- **Status**: PostgreSQL Metric History implemented and verified with libpqxx repository, initial migration schema (001_initial_schema.sql), dedicated background persistence thread sampling cached domain metrics without duplicate /proc reads, nullable double metrics preservation (SQL NULL during warm-up), strict URI and key-value credential masking, graceful degradation handling database downtime without interrupting HTTP API, and 100% test pass rate across 298 tests (241 unit, 57 integration)
-- **Current Implementation Phase**: Phase 14 — PostgreSQL Metric History (libpqxx repository & storage)
-- **Next Approved Phase**: Phase 15 — Systemd, Packaging & Operations
+- **Status**: Systemd service unit, install/uninstall packaging scripts, and portable CMake installation layout implemented and verified with zero machine-specific paths, zero developer RPATH/RUNPATH in binaries, and 100% test pass rate across 301 tests (244 unit, 57 integration)
+- **Current Implementation Phase**: Phase 15 — Systemd, Packaging & Operations
+- **Next Approved Phase**: Phase 16 — Production Readiness (Sanitizers, Benchmarks, Security Audit)
 - **Production Ready**: No
 - **Active Git Branch**: `master`
-- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, rate limit filter & token-bucket limiter, docker collector & endpoints, sse stream service & events endpoint with admission control, metrics exporter & prometheus scrape controller, postgres repository & history service, error responses, unit & integration tests)
+- **Current Implementation Exists**: Yes (build system, logger, config loader, server lifecycle, health endpoint, system collector, CPU collector & endpoint, memory collector & endpoint, disk collector & endpoint, network collector & endpoint, process collector & endpoints, service collector & endpoints, auth filter & constant-time security helper, rate limit filter & token-bucket limiter, docker collector & endpoints, sse stream service & events endpoint with admission control, metrics exporter & prometheus scrape controller, postgres repository & history service, systemd service unit template, install and uninstall scripts, error responses, unit & integration tests)
 
 ---
 
@@ -31,8 +31,8 @@
 | **Phase 12** | SSE Live Metrics (`/api/v1/events` streaming channel) | **COMPLETED** | N/A |
 | **Phase 13** | Prometheus Exposition (`/metrics` scrape endpoint) | **COMPLETED** | N/A |
 | **Phase 14** | PostgreSQL Metric History (libpqxx repository & storage) | **COMPLETED** | N/A |
-| **Phase 15** | Operations (systemd unit, packaging, config validator) | PENDING | **YES (Next Approved)** |
-| **Phase 16** | Production Readiness (Sanitizers, Benchmarks, Security Audit) | PENDING | NO |
+| **Phase 15** | Operations (systemd unit, packaging, config validator) | **COMPLETED** | N/A |
+| **Phase 16** | Production Readiness (Sanitizers, Benchmarks, Security Audit) | PENDING | **YES (Next Approved)** |
 
 ---
 
@@ -156,30 +156,33 @@
 
 ---
 
-## Phase 14 Verification and Gate Status
+## Phase 15 Verification and Gate Status
 - **Exit Gate Criteria**:
-  - [x] Canonical PostgreSQL initial schema migration created in `scripts/migrations/001_initial_schema.sql` defining `host_metrics` with `TIMESTAMPTZ`, nullable metrics, and compound index `idx_host_metrics_hostname_time`.
-  - [x] Parameterized SQL queries enforced via `pqxx::params` and `tx.exec(sql, p)`, completely eliminating SQL injection risks.
-  - [x] Abstract `IPostgresRepository` interface, concrete `PostgresRepository` with `libpqxx`, and thread-safe in-memory `MockPostgresRepository` implemented.
-  - [x] Dedicated background persistence loop in `HistoryService` sampling cached domain metrics (`SystemService`, `CpuService`, `MemoryService`, `NetworkService`) without redundant `/proc` parsing or Drogon event loop starvation.
-  - [x] Nullable metrics preservation: `cpu_usage_percent`, `net_rx_bytes_per_sec`, and `net_tx_bytes_per_sec` correctly persist and return SQL `NULL` when metrics are warming up.
-  - [x] Comprehensive credential redaction: connection strings containing secrets are masked across all logs, exceptions, and state via `nodepulse::utils::redact_connection_string()`.
-  - [x] Optional database and graceful degradation: if PostgreSQL is disabled (`postgres.enabled: false`) or the database server is offline/unreachable, core monitoring remains 100% operational, and failed background sample writes are safely dropped without memory growth.
-  - [x] 100% test pass rate across unit and integration test suites (298/298 passed: 241 unit, 57 integration).
+  - [x] Hard-coded developer-machine paths (`/home/devqii`, `~/.local`) completely removed from repository CMake files and replaced with portable package discovery (`find_package(PostgreSQL REQUIRED)`, `pkg_check_modules(PQXX libpqxx)` / `find_library(PQXX_LIBRARIES)`).
+  - [x] Compiler reproducible build prefix mapping (`-ffile-prefix-map`) added to eliminate developer home directory paths from `__FILE__` and debug symbols in compiled binaries.
+  - [x] Installed binary contains zero RPATH or RUNPATH (`readelf -d` reports no RPATH/RUNPATH; `strings` finds zero occurrences of developer-home paths).
+  - [x] Configurable system configuration directory (`NODEPULSE_SYSCONFDIR`, default `/etc`) ensures configuration installs to `<DESTDIR>/etc/nodepulse/` instead of `/usr/etc/nodepulse/`.
+  - [x] Systemd service unit template `infrastructure/systemd/nodepulse.service.in` dynamically configures `ExecStart` matching the exact installed binary path for both `--prefix /usr` and default `/usr/local` prefix layouts.
+  - [x] Production service hardening preserved: `User=nodepulse`, `Group=nodepulse`, `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `ReadOnlyPaths=/proc /sys /etc/os-release /etc/nodepulse`, `ReadWritePaths=/var/log/nodepulse`.
+  - [x] Unit verification via `systemd-analyze verify` passes cleanly with zero syntax, permission, or hardening errors.
+  - [x] Production installation script `scripts/install.sh` and uninstallation script `scripts/uninstall.sh` pass `bash -n` syntax check, preserve operator configuration, and support custom prefixes and `DESTDIR`.
+  - [x] 100% test pass rate across unit and integration test suites (301/301 passed: 244 unit, 57 integration).
   - [x] Zero compiler warnings or errors under `-Wall -Wextra -Wpedantic -Werror`.
   - [x] `format-check` passes with zero violations.
   - [x] `tidy` passes with zero warnings or errors across all 39 source files.
-  - [x] Live PostgreSQL smoke test verified against ephemeral PostgreSQL 17 container verifying schema migration, snapshot insertion with null fields, query retrieval, zero credential exposure, and clean container teardown.
+  - [x] `git diff --check` passes with zero errors.
 - **Verification Commands Executed**:
   ```bash
   cmake --build build -- -j$(nproc)
-  LD_LIBRARY_PATH="/home/devqii/.local/lib/x86_64-linux-gnu:/home/devqii/.local/lib:${LD_LIBRARY_PATH}" ctest --test-dir build --output-on-failure
+  LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:$HOME/.local/lib:$LD_LIBRARY_PATH" ctest --test-dir build --output-on-failure
   cmake --build build --target format-check
   cmake --build build --target tidy
+  git diff --check
   ```
 - **Verification Results**:
   - Build: Succeeded cleanly (all targets built under `-Wall -Wextra -Wpedantic -Werror`).
-  - Tests: 298/298 passed (100% pass rate: 241 unit tests, 57 integration tests).
+  - Tests: 301/301 passed (100% pass rate: 244 unit tests, 57 integration tests).
   - Format check: Succeeded (0 violations).
   - Static analysis: Succeeded (0 errors, 0 warnings across all 39 source files).
-- **Confirmation**: Phase 15 (Operations & Packaging) has NOT been started.
+  - Diff check: Clean (0 errors).
+- **Confirmation**: Phase 16 (Production Readiness) has NOT been started.

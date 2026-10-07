@@ -43,8 +43,8 @@ target_include_directories(nodepulse_lib
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        /home/devqii/.local/include
-        /home/devqii/.local/include/postgresql
+        ${PostgreSQL_INCLUDE_DIRS}
+        ${PQXX_INCLUDE_DIRS}
 )
 
 target_link_libraries(nodepulse_lib
@@ -52,8 +52,8 @@ target_link_libraries(nodepulse_lib
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Drogon::Drogon
-        /home/devqii/.local/lib/x86_64-linux-gnu/libpqxx.a
-        /home/devqii/.local/lib/x86_64-linux-gnu/libpq.so
+        ${PQXX_LIBRARIES}
+        ${PostgreSQL_LIBRARIES}
         ${CMAKE_DL_LIBS}
 )
 

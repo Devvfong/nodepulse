@@ -1,7 +1,3 @@
-link_directories(
-    /home/devqii/.local/lib/x86_64-linux-gnu
-    /home/devqii/.local/lib
-)
 
 # Unit Tests Target
 add_executable(tests_unit
@@ -34,19 +30,6 @@ target_link_libraries(tests_unit
         pthread
 )
 
-target_link_directories(tests_unit
-    PRIVATE
-        /home/devqii/.local/lib/x86_64-linux-gnu
-        /home/devqii/.local/lib
-)
-target_link_options(tests_unit
-    PRIVATE
-        -L/home/devqii/.local/lib/x86_64-linux-gnu
-        -L/home/devqii/.local/lib
-        -Wl,-rpath-link,/home/devqii/.local/lib/x86_64-linux-gnu
-        -Wl,-rpath,/home/devqii/.local/lib/x86_64-linux-gnu
-)
-
 target_compile_features(tests_unit PRIVATE cxx_std_20)
 target_compile_definitions(tests_unit PRIVATE NODEPULSE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
@@ -70,19 +53,6 @@ target_link_libraries(tests_integration
         pthread
 )
 
-target_link_directories(tests_integration
-    PRIVATE
-        /home/devqii/.local/lib/x86_64-linux-gnu
-        /home/devqii/.local/lib
-)
-target_link_options(tests_integration
-    PRIVATE
-        -L/home/devqii/.local/lib/x86_64-linux-gnu
-        -L/home/devqii/.local/lib
-        -Wl,-rpath-link,/home/devqii/.local/lib/x86_64-linux-gnu
-        -Wl,-rpath,/home/devqii/.local/lib/x86_64-linux-gnu
-)
-
 target_compile_features(tests_integration PRIVATE cxx_std_20)
 
 if(WARNINGS_AS_ERRORS)
@@ -93,10 +63,8 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(tests_unit
-    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=/home/devqii/.local/lib/x86_64-linux-gnu:/home/devqii/.local/lib"
     DISCOVERY_MODE PRE_TEST
 )
 gtest_discover_tests(tests_integration
-    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=/home/devqii/.local/lib/x86_64-linux-gnu:/home/devqii/.local/lib"
     DISCOVERY_MODE PRE_TEST
 )

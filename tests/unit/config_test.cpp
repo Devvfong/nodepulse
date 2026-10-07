@@ -1,4 +1,6 @@
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -223,6 +225,67 @@ TEST(ConfigTest, PostgresValidationRejectsEmptyConnStringOrZeroInterval) {
     cfg.postgres.snapshot_interval_seconds = 0;
     auto errors_interval = cfg.validate();
     EXPECT_FALSE(errors_interval.empty());
+}
+
+TEST(ConfigTest, DockerSocketValidation) {
+    Config cfg;
+    cfg.collectors.docker.enabled = true;
+
+    cfg.collectors.docker.socket_path = "";
+    auto errs = cfg.validate();
+    EXPECT_FALSE(errs.empty());
+
+    cfg.collectors.docker.socket_path = "http://127.0.0.1:2375";
+    errs = cfg.validate();
+    EXPECT_FALSE(errs.empty());
+
+    cfg.collectors.docker.socket_path = "https://127.0.0.1:2376";
+    errs = cfg.validate();
+    EXPECT_FALSE(errs.empty());
+
+    cfg.collectors.docker.socket_path = "tcp://127.0.0.1:2375";
+    errs = cfg.validate();
+    EXPECT_FALSE(errs.empty());
+
+    cfg.collectors.docker.socket_path = "/var/run/docker.sock";
+    cfg.collectors.docker.timeout_ms = 0;
+    errs = cfg.validate();
+    EXPECT_FALSE(errs.empty());
+
+    cfg.collectors.docker.timeout_ms = 2000;
+    errs = cfg.validate();
+    EXPECT_TRUE(errs.empty());
+}
+
+TEST(ConfigTest, RateLimitingValidationRejectsZeroValues) {
+    Config cfg;
+    cfg.rate_limiting.enabled = true;
+
+    cfg.rate_limiting.requests_per_minute = 0;
+    EXPECT_FALSE(cfg.validate().empty());
+
+    cfg.rate_limiting.requests_per_minute = 120;
+    cfg.rate_limiting.burst_capacity = 0;
+    EXPECT_FALSE(cfg.validate().empty());
+
+    // When disabled, zero values are ignored
+    cfg.rate_limiting.enabled = false;
+    cfg.rate_limiting.requests_per_minute = 0;
+    cfg.rate_limiting.burst_capacity = 0;
+    EXPECT_TRUE(cfg.validate().empty());
+}
+
+TEST(ConfigTest, LoadRespectsNodepulseConfigEnvVar) {
+    const std::string temp_path = "/tmp/nodepulse_env_test_config.json";
+    {
+        std::ofstream ofs(temp_path);
+        ofs << "{\"server\": {\"port\": 9191}}";
+    }
+    setenv("NODEPULSE_CONFIG", temp_path.c_str(), 1);
+    auto cfg = Config::load(std::nullopt);
+    EXPECT_EQ(cfg.server.port, 9191);
+    unsetenv("NODEPULSE_CONFIG");
+    std::remove(temp_path.c_str());
 }
 
 }  // namespace nodepulse::config

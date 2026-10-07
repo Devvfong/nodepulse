@@ -11,14 +11,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_BUILD_RPATH
-    /home/devqii/.local/lib/x86_64-linux-gnu
-    /home/devqii/.local/lib
-)
-set(CMAKE_INSTALL_RPATH
-    /home/devqii/.local/lib/x86_64-linux-gnu
-    /home/devqii/.local/lib
-)
+
 # Build Options
 option(BUILD_TESTING "Build test suites" ON)
 option(WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
@@ -31,6 +24,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
     if(WARNINGS_AS_ERRORS)
         add_compile_options(-Werror)
+    endif()
+    if(DEFINED ENV{HOME})
+        add_compile_options(-ffile-prefix-map=$ENV{HOME}=/usr -ffile-prefix-map=$ENV{HOME}/.local=/usr)
     endif()
 endif()
 
@@ -51,11 +47,17 @@ find_package(Threads REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Drogon REQUIRED)
+find_package(PostgreSQL REQUIRED)
 
-link_directories(
-    /home/devqii/.local/lib/x86_64-linux-gnu
-    /home/devqii/.local/lib
-)
+# Portable pqxx discovery
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PQXX QUIET libpqxx)
+endif()
+if(NOT PQXX_FOUND)
+    find_path(PQXX_INCLUDE_DIRS NAMES pqxx/pqxx)
+    find_library(PQXX_LIBRARIES NAMES pqxx libpqxx)
+endif()
 
 # Clang-Tidy Integration during compilation
 if(ENABLE_CLANG_TIDY)
@@ -107,3 +109,38 @@ if(BUILD_TESTING)
     find_package(GTest REQUIRED)
     add_subdirectory(tests)
 endif()
+
+# Installation Rules (Phase 15)
+include(GNUInstallDirs)
+
+set(NODEPULSE_SYSCONFDIR "/etc" CACHE PATH "System configuration directory (default: /etc)")
+set(NODEPULSE_CONFIG_DIR "${NODEPULSE_SYSCONFDIR}/nodepulse")
+set(NODEPULSE_CONFIG_FILE "${NODEPULSE_CONFIG_DIR}/config.json")
+set(NODEPULSE_INSTALL_FULL_BINDIR "${CMAKE_INSTALL_FULL_BINDIR}")
+
+if(NOT DEFINED SYSTEMD_UNIT_DIR)
+    set(SYSTEMD_UNIT_DIR "lib/systemd/system" CACHE PATH "Directory for systemd service units")
+endif()
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/infrastructure/systemd/nodepulse.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/infrastructure/systemd/nodepulse.service
+    @ONLY
+)
+
+install(FILES config/config.example.json
+    DESTINATION ${NODEPULSE_SYSCONFDIR}/nodepulse
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/infrastructure/systemd/nodepulse.service
+    DESTINATION ${SYSTEMD_UNIT_DIR}
+)
+
+install(CODE "
+    set(_svc_path \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${SYSTEMD_UNIT_DIR}/nodepulse.service\")
+    if(EXISTS \"\${_svc_path}\")
+        file(READ \"\${_svc_path}\" _svc_content)
+        string(REGEX REPLACE \"ExecStart=[^ \t\r\n]+/nodepulse_server\" \"ExecStart=\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/nodepulse_server\" _svc_content \"\${_svc_content}\")
+        file(WRITE \"\${_svc_path}\" \"\${_svc_content}\")
+    endif()
+")
