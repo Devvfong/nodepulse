@@ -45,7 +45,8 @@ jobs:
             libgtest-dev \
             uuid-dev \
             zlib1g-dev \
-            default-libmysqlclient-dev \
+            libmariadb-dev \
+            libmariadb-dev-compat \
             libpq-dev \
             libpqxx-dev \
             libsqlite3-dev \
@@ -94,7 +95,8 @@ jobs:
             libgtest-dev \
             uuid-dev \
             zlib1g-dev \
-            default-libmysqlclient-dev \
+            libmariadb-dev \
+            libmariadb-dev-compat \
             libpq-dev \
             libpqxx-dev \
             libsqlite3-dev \
