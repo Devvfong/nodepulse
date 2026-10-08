@@ -1,0 +1,174 @@
+# =============================================================================
+# NodePulse Reference Reverse Proxy Configuration (Nginx)
+# =============================================================================
+# Architecture & Security Boundary Notes:
+#
+# 1. Zero Secret Footprint in Browser:
+#    The NodePulse C++ agent API key (<NODE_PULSE_API_KEY>) is injected
+#    authoritatively by this reverse proxy when forwarding requests upstream.
+#    The browser runtime and Angular application NEVER possess, prompt for,
+#    or store the API key in environment files, local storage, or bundles.
+#    All client-side HTTP and SSE requests target relative same-origin paths.
+#
+# 2. Operator Access Control Boundary:
+#    NodePulse is a host-level telemetry console designed for infrastructure
+#    operators. This proxy MUST NOT be exposed directly to the public Internet
+#    without authentication and access perimeter controls. Operators should
+#    enforce access control via:
+#      a. Network Boundary: Restricted management VLAN or VPN (WireGuard/Tailscale).
+#      b. HTTP Basic Auth: 'auth_basic "NodePulse Restricted"; auth_basic_user_file /etc/nginx/.htpasswd;'
+#      c. Mutual TLS (mTLS): 'ssl_client_certificate /etc/ssl/certs/ca.crt; ssl_verify_client on;'
+#      d. Upstream SSO / Identity Proxy: OAuth2-Proxy, Cloudflare Access, or Tailscale funnel.
+# =============================================================================
+
+# Upstream definition for NodePulse C++20 Drogon agent
+upstream nodepulse_backend {
+    server 127.0.0.1:8080;
+    keepalive 32;
+}
+
+# Optional: HTTP to HTTPS Redirect
+# server {
+#     listen 80;
+#     listen [::]:80;
+#     server_name nodepulse.internal localhost;
+#     return 301 https://$host$request_uri;
+# }
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    # SSL / TLS Configuration (Uncomment for production HTTPS termination)
+    # listen 443 ssl http2;
+    # listen [::]:443 ssl http2;
+    # ssl_certificate /etc/ssl/certs/nodepulse.crt;
+    # ssl_certificate_key /etc/ssl/private/nodepulse.key;
+    # ssl_protocols TLSv1.2 TLSv1.3;
+    # ssl_ciphers HIGH:!aNULL:!MD5;
+    # ssl_prefer_server_ciphers on;
+    # ssl_session_cache shared:SSL:10m;
+    # ssl_session_timeout 1d;
+
+    server_name nodepulse.internal localhost;
+
+    # Operator Access Control Boundary (Example: HTTP Basic Auth)
+    # auth_basic "NodePulse Operator Access";
+    # auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # Compression Settings
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml font/woff2;
+
+    # Base Security Headers (Active in blocks without child add_header directives)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none';" always;
+    add_header Permissions-Policy "geolocation=(), camera=(), microphone=()" always;
+
+    # Root static file serving directory
+    # Points to compiled Angular distribution assets
+    root /usr/share/nginx/html; # Or /var/www/nodepulse/dist/web/browser
+    index index.html;
+
+    # -------------------------------------------------------------------------
+    # Static Assets with Hash-Based Immutable Caching
+    # -------------------------------------------------------------------------
+    location ~* \.(?:css|js|woff2?|ttf|eot|ico|png|jpg|jpeg|gif|svg|webp)$ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none';" always;
+        access_log off;
+        try_files $uri =404;
+    }
+
+    # -------------------------------------------------------------------------
+    # Single Page Application (SPA) Client-Side Routing & Cache Revalidation
+    # -------------------------------------------------------------------------
+    # index.html must NEVER be cached by the browser to ensure updates are picked up.
+    # Note: Explicitly re-declaring security headers here because Nginx add_header
+    # directives do not inherit from parent server blocks when child blocks declare headers.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none';" always;
+        add_header Permissions-Policy "geolocation=(), camera=(), microphone=()" always;
+    }
+
+    # Fallback to index.html for Angular HTML5 pushState routing
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none';" always;
+        add_header Permissions-Policy "geolocation=(), camera=(), microphone=()" always;
+    }
+
+    # -------------------------------------------------------------------------
+    # NodePulse REST API Reverse Proxy
+    # -------------------------------------------------------------------------
+    location /api/ {
+        proxy_pass http://nodepulse_backend/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        # Preserve client headers and upstream scheme
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Upstream Header Injection:
+        # The reverse proxy injects the secret API key so the client never knows it.
+        # Replace <NODE_PULSE_API_KEY> with the actual agent key (e.g. from environment or secret vault)
+        proxy_set_header X-API-Key "<NODE_PULSE_API_KEY>";
+
+        # Standard timeouts
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # -------------------------------------------------------------------------
+    # NodePulse Realtime SSE Telemetry Stream Reverse Proxy
+    # -------------------------------------------------------------------------
+    # Must maintain persistent connection and disable proxy buffering
+    location /api/v1/events {
+        proxy_pass http://nodepulse_backend/api/v1/events;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        # Preserve client headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Authoritative agent authentication header injection
+        proxy_set_header X-API-Key "<NODE_PULSE_API_KEY>";
+
+        # SSE-critical directives:
+        # 1. Disable proxy buffering so chunks are delivered immediately
+        # 2. Disable caching
+        # 3. Disable chunked transfer encoding alteration
+        # 4. Set long timeouts (24 hours) for continuous streaming
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+}
